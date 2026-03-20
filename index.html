@@ -245,8 +245,10 @@ canvas#gc{display:block;image-rendering:pixelated;position:absolute;top:76px;lef
 @keyframes shake{0%,100%{transform:translate(-50%,-50%)}25%{transform:translate(-53%,-50%)}75%{transform:translate(-47%,-50%)}}
 .egg-shake{animation:shake .15s linear infinite;}
 </style>
-<!-- QR code generator (lightweight, no dependencies) -->
+<!-- QR code generator -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<!-- jsQR scanner — works on Safari/iPhone, no BarcodeDetector needed -->
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 </head>
 <body>
 
@@ -2106,10 +2108,11 @@ async function showHost(){
     const code = await sdpEncode(desc);
     $('hostSDP').value = code;
 
-    const url = location.href.split('?')[0]+'?join='+encodeURIComponent(code);
+    // Encode just the SDP code in QR (not a URL)
+    // file:// URLs won't open on iPhone — friend scans this code directly in-app
     $('hostQRWrap').style.display='flex';
-    drawQR('hostQR', url);
-    $('hostStat').textContent='Step 1: Friend scans QR above';
+    drawQR('hostQR', code);
+    $('hostStat').textContent='Friend: open game → Join → scan this QR';
 
     // Start scanning for answer after QR is shown
     setTimeout(()=>{
@@ -2304,47 +2307,80 @@ let _scanStream=null, _scanRAF=null;
 
 async function startScanner(videoId, canvasId, statId, onResult){
   const video=$(videoId), cv=$(canvasId), stat=$(statId);
-  try{
-    _scanStream = await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:'environment', width:{ideal:640}, height:{ideal:640}}
-    });
-    video.srcObject=_scanStream;
-    video.play();
-    stat.textContent='Scanning - point at QR code';
+  if(!video||!cv){ console.warn('Scanner elements missing'); return; }
 
-    // Poll frames
+  try{
+    // Request back camera — essential for iPhone
+    const constraints={
+      video:{
+        facingMode:{ideal:'environment'},
+        width:{ideal:1280}, height:{ideal:720}
+      }
+    };
+    _scanStream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.setAttribute('playsinline','');  // required for iOS
+    video.setAttribute('muted','');
+    video.muted = true;
+    video.srcObject = _scanStream;
+    await video.play();
+    stat.textContent = 'Scanning - hold steady...';
+
+    let lastScan = 0;
     function scan(){
-      if(video.readyState===video.HAVE_ENOUGH_DATA){
-        cv.width=video.videoWidth; cv.height=video.videoHeight;
-        const ctx2=cv.getContext('2d');
-        ctx2.drawImage(video,0,0);
-        try{
-          // Use BarcodeDetector if available (Chrome/Edge/Safari 17+)
-          if(window._barcodeDetector){
-            window._barcodeDetector.detect(cv).then(codes=>{
-              if(codes.length>0){ onResult(codes[0].rawValue); return; }
-            }).catch(()=>{});
-          }
-        }catch(e){}
-        // Fallback: jsQR if loaded
-        if(window.jsQR){
-          const img=ctx2.getImageData(0,0,cv.width,cv.height);
-          const result=jsQR(img.data,img.width,img.height);
-          if(result){ onResult(result.data); return; }
+      _scanRAF = requestAnimationFrame(scan);
+      // Throttle to ~15fps for battery/performance
+      const now = Date.now();
+      if(now - lastScan < 66) return;
+      lastScan = now;
+
+      if(video.readyState < video.HAVE_ENOUGH_DATA) return;
+
+      cv.width  = video.videoWidth;
+      cv.height = video.videoHeight;
+      const ctx2 = cv.getContext('2d', {willReadFrequently:true});
+      ctx2.drawImage(video, 0, 0);
+
+      const imageData = ctx2.getImageData(0, 0, cv.width, cv.height);
+
+      // jsQR — works on ALL browsers including Safari/iPhone
+      if(window.jsQR){
+        const result = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'dontInvert'
+        });
+        if(result && result.data){
+          onResult(result.data);
+          return; // stop scanning after first result
         }
       }
-      _scanRAF=requestAnimationFrame(scan);
+
+      // BarcodeDetector as bonus where available (Chrome Android)
+      if(window.BarcodeDetector && window._barcodeDetector){
+        window._barcodeDetector.detect(cv).then(codes=>{
+          if(codes.length > 0) onResult(codes[0].rawValue);
+        }).catch(()=>{});
+      }
     }
-    // Try BarcodeDetector API first
+
     if(window.BarcodeDetector){
-      window._barcodeDetector=new BarcodeDetector({formats:["qr_code"]});
+      try{ window._barcodeDetector = new BarcodeDetector({formats:['qr_code']}); }
+      catch(e){ window._barcodeDetector = null; }
     }
-    _scanRAF=requestAnimationFrame(scan);
+
+    _scanRAF = requestAnimationFrame(scan);
+
   }catch(e){
-    stat.textContent='Camera unavailable — use manual code below';
-    // Show the manual fallback
-    const details=video.closest('.screen')&&video.closest('.screen').querySelector('details');
-    if(details) details.open=true;
+    console.warn('Camera error:', e);
+    if(e.name === 'NotAllowedError'){
+      stat.textContent = 'Camera permission denied — use manual code below';
+    } else if(e.name === 'NotFoundError'){
+      stat.textContent = 'No camera found — use manual code below';
+    } else {
+      stat.textContent = 'Camera unavailable — use manual code below';
+    }
+    // Auto-open manual fallback
+    const details = video.closest('div') && video.closest('[id$="Section"]') &&
+                    video.closest('[id$="Section"]').querySelector('details');
+    if(details) details.open = true;
   }
 }
 
@@ -2358,13 +2394,23 @@ function stopScanner(videoId){
 
 // ── Auto-join if URL has ?join= param (opened via QR scan) ──
 (function checkURLJoin(){
-  const params=new URLSearchParams(location.search);
-  if(params.get('join')){
-    // Auto-navigate to join lobby
-    window.addEventListener('DOMContentLoaded',()=>{
-      showJoin();
-    },{once:true});
-  }
+  try{
+    const params=new URLSearchParams(location.search);
+    const joinCode=params.get('join');
+    if(joinCode){
+      // Auto-navigate to join lobby with pre-filled code
+      const ready=()=>{
+        showJoin();
+        // Pre-fill offer area if visible
+        setTimeout(()=>{
+          const el=$('offerArea');
+          if(el){ el.value=decodeURIComponent(joinCode); }
+        },300);
+      };
+      if(document.readyState==='loading') window.addEventListener('DOMContentLoaded',ready,{once:true});
+      else ready();
+    }
+  }catch(e){}
 })();
 
 // ── Menu particles ──
