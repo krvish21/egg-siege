@@ -296,7 +296,7 @@ canvas#gc{display:block;image-rendering:pixelated;position:absolute;top:76px;lef
   <div class="lobby-wrap">
     <div class="lobby-title" id="lobbyTitle">MULTIPLAYER</div>
 
-    <!-- Role picker -->
+    <!-- Role picker — HOST ONLY (joiner gets assigned the opposite role) -->
     <div id="roleSection">
       <div class="status-msg" style="color:rgba(255,255,255,.5)">Choose your role:</div>
       <div class="role-select">
@@ -1961,12 +1961,15 @@ document.addEventListener('keyup',e=>{
 let peer=null, conn=null, peerRole='warrior';
 
 // Word list for memorable room codes
+// All words are exactly 4 letters — guaranteed
 const WORDS=['FIRE','WOLF','MOON','STAR','IRON','GOLD','BONE','ROCK',
              'WING','FANG','CLAW','MIST','DAWN','DUSK','RAGE','HERO',
-             'BLAZE','STORM','FROST','SHADOW','BLADE','ARROW','KNIGHT'];
+             'LAVA','BOLT','GRIM','FURY','DARK','VOID','RUNE','SOUL',
+             'OMEN','PIKE','HUNT','VEIL','WARD','FLUX'];
 
 function randomCode(){
-  return WORDS[Math.floor(Math.random()*WORDS.length)];
+  const w = WORDS[Math.floor(Math.random()*WORDS.length)];
+  return w.slice(0,4); // always exactly 4 letters
 }
 
 function pickRole(r){
@@ -2010,32 +2013,42 @@ function makePeer(id){
 
 function setupConn(c){
   conn=c;
+
   c.on('open',()=>{
-    console.log('PeerJS connection open');
+    console.log('PeerJS data channel open, gameMode='+gameMode);
     isConnected=true;
     if(gameMode==='host'){
-      // Tell joiner their role and wave count
+      // Send role assignment to joiner — retry a few times in case first message is missed
       const oppRole=peerRole==='warrior'?'builder':'warrior';
-      c.send(JSON.stringify({t:'role',role:oppRole,waves:TOTAL_WAVES}));
-      setTimeout(()=>initGame('host',peerRole),600);
+      const msg=JSON.stringify({t:'role',role:oppRole,waves:TOTAL_WAVES});
+      c.send(msg);
+      // Retry once after 500ms in case the first send was lost
+      setTimeout(()=>{ try{c.send(msg);}catch(e){} },500);
+      // Start game on host side
+      setTimeout(()=>initGame('host',peerRole),800);
     }
   });
+
   c.on('data',d=>{
     try{
-      const msg=JSON.parse(d);
+      const msg=typeof d==='string'?JSON.parse(d):d;
       if(msg.t==='role'){
+        // Only act on first role message (ignore retry duplicate)
+        if(gameMode==='join'&&running) return;
         myRole=msg.role;
         if(msg.waves) TOTAL_WAVES=msg.waves;
-        setTimeout(()=>initGame('join',myRole),600);
+        gameMode='join'; // ensure gameMode is set before initGame
+        setTimeout(()=>initGame('join',myRole),400);
       }
       if(msg.t==='i') remInp={x:msg.x,y:msg.y,atk:msg.atk,spec:msg.spec,coll:msg.coll};
       if(msg.t==='sync'){
         const rp=gameMode==='join'?warrior:builder;
         if(rp&&msg.x!==undefined){rp.x=msg.x;rp.y=msg.y;rp.hp=msg.hp;rp.alive=msg.al;rp.dir=msg.dir;rp.frame=msg.fr;}
       }
-    }catch(e){}
+    }catch(e){ console.warn('data parse error',e); }
   });
-  c.on('close',()=>{ isConnected=false; });
+
+  c.on('close',()=>{ isConnected=false; if(running) showAnnounce('Friend disconnected','#ff4444'); });
   c.on('error',e=>console.warn('conn error',e));
 }
 
@@ -2045,6 +2058,8 @@ async function showHost(){
   $('lobbyTitle').textContent='HOST GAME';
   $('hostSection').style.display='block';
   $('joinSection').style.display='none';
+  // Show role picker for host
+  $('roleSection').style.display='block';
   $('hostSpin').style.display='block';
   $('hostStat').textContent='Connecting to server…';
   $('roomCodeBox').textContent='…';
@@ -2062,6 +2077,7 @@ async function showHost(){
 
   peer.on('connection',c=>{
     $('hostStat').textContent='Friend connected! Starting…';
+    gameMode='host'; // ensure set before setupConn
     setupConn(c);
   });
 
@@ -2082,33 +2098,37 @@ function showJoin(){
   $('lobbyTitle').textContent='JOIN GAME';
   $('hostSection').style.display='none';
   $('joinSection').style.display='block';
+  // Hide role picker — joiner's role is assigned by host
+  $('roleSection').style.display='none';
   $('joinStat').textContent='';
-  // Focus first box
   setTimeout(()=>{ if($('cb0')) $('cb0').focus(); },100);
 }
 
 function joinRoom(){
   const code=getTypedCode();
   if(code.length<4){ $('joinStat').textContent='Enter all 4 letters'; return; }
-  $('joinStat').textContent='Connecting…';
+  $('joinStat').textContent='Connecting to '+code+'…';
 
   if(peer){ try{peer.destroy();}catch(e){} peer=null; }
+  gameMode='join'; // set early so setupConn knows context
 
-  // Join peer uses a random ID
-  peer=makePeer(undefined);
-  peer.on('open',()=>{
-    const c=peer.connect('eggsiego-'+code,{reliable:false});
+  peer=makePeer(undefined); // random peer ID for joiner
+  peer.on('open',id=>{
+    console.log('Joiner peer open, connecting to eggsiego-'+code);
+    $('joinStat').textContent='Reached server, connecting to host…';
+    // reliable:true ensures the role handshake message is never dropped
+    const c=peer.connect('eggsiego-'+code,{reliable:true,serialization:'json'});
     setupConn(c);
-    c.on('error',e=>{ $('joinStat').textContent='Could not connect — check the code'; });
   });
   peer.on('error',e=>{
-    $('joinStat').textContent='Connection failed: '+e.message;
+    console.error('Peer error:',e);
+    $('joinStat').textContent='Failed: '+(e.type||e.message)+' — check code';
   });
 
-  // Timeout if no connection after 10s
+  // Timeout
   setTimeout(()=>{
-    if(!isConnected) $('joinStat').textContent='Timed out — check code and try again';
-  },10000);
+    if(!isConnected) $('joinStat').textContent='Timed out — is host waiting?';
+  },12000);
 }
 
 // Stub — no longer needed but kept so backMenu works
