@@ -219,6 +219,7 @@ canvas#gc{display:block;image-rendering:pixelated;position:absolute;top:76px;lef
 .abt-coll{color:var(--blue);border-color:var(--blue);}
 .abt-coll.pressed{background:rgba(48,168,232,.3);box-shadow:0 0 14px var(--blue);}
 .abt-heal{color:var(--green);border-color:var(--green);font-size:.3rem;}
+.abt-jump{color:#88aaff;border-color:#88aaff;}
 .abt-heal.pressed{background:rgba(48,232,112,.3);box-shadow:0 0 14px var(--green);}
 #specBar{
   position:absolute;bottom:148px;right:16px;
@@ -413,11 +414,10 @@ canvas#gc{display:block;image-rendering:pixelated;position:absolute;top:76px;lef
     <div id="joystickZone"><div id="joystickKnob"></div></div>
     <div class="act-btns" id="actionBtns">
       <div class="act-row">
+        <!-- SPEC: warrior=gun, builder=area collect burst (needs charge) -->
         <button class="abt abt-spec" id="btnSpec">SPEC</button>
-        <button class="abt abt-atk" id="btnAtk">ATK</button>
-      </div>
-      <div class="act-row" id="builderRow" style="display:none">
-        <button class="abt abt-coll" id="btnColl">PICK</button>
+        <!-- JUMP button for comfort -->
+        <button class="abt abt-jump" id="btnJump">JUMP</button>
       </div>
     </div>
   </div>
@@ -500,7 +500,7 @@ const WORLD=2800;
 const GRAV=0.44, PSPD=3.0, JFORCE=-9.2;
 
 // ── Input ──
-const inp={x:0,y:0,atk:false,spec:false,coll:false};
+const inp={x:0,y:0,atk:false,spec:false,coll:false,jump:false};
 let remInp={x:0,y:0,atk:false,spec:false,coll:false};
 
 // ── Game State ──
@@ -911,7 +911,7 @@ function updatePlayer(p,k){
     p.vx *= p.onGround ? 0.72 : 0.92; // ground friction vs air friction
     if(Math.abs(p.vx)<0.1) p.vx=0;
   }
-  if((k.y<-.3||k.jump)&&p.onGround){p.vy=JFORCE;mkPart(p.x+p.w/2,p.y+p.h,'#aaaaff',4);}
+  if((k.y<-.3||k.jump||k.up)&&p.onGround){p.vy=JFORCE;mkPart(p.x+p.w/2,p.y+p.h,'#aaaaff',4);}
   p.vy+=GRAV;p.x+=p.vx;p.y+=p.vy;
   collide(p);
   separateFromEnemies(p);
@@ -924,14 +924,41 @@ function updatePlayer(p,k){
     if(p.regenT>=180){ p.hp=Math.min(p.maxHp, p.hp+1); p.regenT=0; updateHPBars(); }
   } else { p.regenT=0; }
 
-  if(k.atk&&p.atkT<=0){p.atkT=22;meleeAtk(p);}
-  if(k.spec&&p.specT<=0){
-    if(p.role==='warrior'){p.specT=6;doSpecial(p);}  // warrior: rapid fire, tiny cooldown
-    else if(p.specCharge>=1){p.specT=100;p.specCharge=0;doSpecial(p);}  // builder: needs charge
+  // AUTO-ATTACK: melee fires automatically when enemy is in range
+  if(p.atkT<=0){
+    const atkRange = 58; // slightly wider than hitbox
+    for(const e of enemies){
+      if(!e.alive) continue;
+      if(Math.abs(e.x - p.x) < atkRange && Math.abs(e.y - p.y) < 40){
+        p.atkT=22; meleeAtk(p); break;
+      }
+    }
+  }
+  // Manual attack button still works as override
+  if(k.atk && p.atkT<=0){p.atkT=22; meleeAtk(p);}
+
+  // WARRIOR: auto-fire projectile when holding spec OR enemy in range
+  // BUILDER: spec needs charge
+  if(p.specT<=0){
+    if(p.role==='warrior'){
+      // Auto-fire when enemy detected ahead within 300px
+      const fireRange=300;
+      let enemyAhead=false;
+      for(const e of enemies){
+        if(!e.alive) continue;
+        const ex=e.x-p.x;
+        if(Math.abs(ex)<fireRange && ex*p.dir>0 && Math.abs(e.y-p.y)<80){
+          enemyAhead=true; break;
+        }
+      }
+      if(enemyAhead||k.spec){p.specT=6; doSpecial(p);}
+    } else {
+      if(k.spec && p.specCharge>=1){p.specT=100; p.specCharge=0; doSpecial(p);}
+    }
   }
 
-  // Builder collect
-  if(p.role==='builder'&&(k.coll||true)){autoCollect(p);}
+  // AUTO-COLLECT: builder always picks up nearby drops (no button needed)
+  if(p.role==='builder') autoCollect(p);
 
   // Healing: walk over heart drops
   for(const d of drops){
@@ -1278,12 +1305,13 @@ function spawnBoss(){
 // CAMERA
 // ══════════════════════════════════════════════
 function updateCam(){
-  // Follow local player; in co-op also average toward remote player
-  const local  = gameMode==='join' ? builder : warrior;
-  const remote = gameMode==='join' ? warrior  : builder;
+  // Always follow THIS device's own player (by role)
+  const local  = myRole==='builder' ? builder : warrior;
+  const remote = myRole==='builder' ? warrior  : builder;
   let tx = local && local.alive ? local.x - W/2 + local.w/2 : CAM;
-  if(remote && remote.alive){
-    tx = (tx + remote.x - W/2 + remote.w/2) / 2;
+  // In single player also keep remote (AI builder) loosely in frame
+  if(gameMode==='single' && remote && remote.alive){
+    tx = (tx * 0.7) + ((remote.x - W/2 + remote.w/2) * 0.3);
   }
   tx = Math.max(0, Math.min(WORLD - W, tx));
   CAM += (tx - CAM) * 0.12;
@@ -1435,9 +1463,9 @@ function loop(){
   if(!running)return;
   frameN++;
 
-  // Determine local vs remote player
-  const localP=gameMode==='join'?builder:warrior;
-  const remoteP=gameMode==='join'?warrior:builder;
+  // Local player is whoever THIS device is playing as (by role)
+  const localP  = myRole==='builder' ? builder : warrior;
+  const remoteP = myRole==='builder' ? warrior  : builder;
 
   updatePlayer(localP,inp);
   if(gameMode==='single'){
@@ -1695,7 +1723,6 @@ function initGame(mode,role){
     warrior=mkPlayer('warrior',950);
     builder=mkPlayer('builder',150);
     $('builderHud').style.display='flex';
-    $('builderRow').style.display='none';
     $('matHud').style.display='flex';
   } else {
     if(myRole==='warrior'){
@@ -1713,7 +1740,6 @@ function initGame(mode,role){
     }
     $('builderHud').style.display='flex';
     if(myRole==='builder'){
-      $('builderRow').style.display='flex';
       $('matHud').style.display='flex';
     }
   }
@@ -1886,8 +1912,8 @@ function setupJoystick(){
 }
 
 function setupActionBtns(){
-  const ba=$('btnAtk'),bs=$('btnSpec'),bc=$('btnColl');
   function tb(el,key){
+    if(!el) return;
     el.addEventListener('touchstart',e=>{e.preventDefault();inp[key]=true;el.classList.add('pressed');},{passive:false});
     el.addEventListener('touchend',e=>{e.preventDefault();inp[key]=false;el.classList.remove('pressed');},{passive:false});
     el.addEventListener('touchcancel',e=>{e.preventDefault();inp[key]=false;el.classList.remove('pressed');},{passive:false});
@@ -1895,7 +1921,8 @@ function setupActionBtns(){
     el.addEventListener('mouseup',()=>{inp[key]=false;el.classList.remove('pressed');});
     el.addEventListener('mouseleave',()=>{inp[key]=false;el.classList.remove('pressed');});
   }
-  tb(ba,'atk');tb(bs,'spec');tb(bc,'coll');
+  tb($('btnSpec'),'spec');
+  tb($('btnJump'),'jump');
 }
 
 // ══════════════════════════════════════════════
