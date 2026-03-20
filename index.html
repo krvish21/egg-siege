@@ -836,7 +836,7 @@ function mkPlayer(role,x){
     dmgMult:role==='warrior'?1.0:0.4};
 }
 function mkEnemy(type,x){
-  const b={x,y:GY-32,w:0,h:0,vx:0,vy:0,onGround:false,
+  const b={_id:Math.random().toString(36).slice(2,8),x,y:GY-32,w:0,h:0,vx:0,vy:0,onGround:false,
     dir:-1,frame:0,ft:0,alive:true,atkT:0,hitFlash:0,
     targetEgg:false,shootT:0,frozen:0};
   switch(type){
@@ -1463,38 +1463,56 @@ function loop(){
   if(!running)return;
   frameN++;
 
-  // Local player is whoever THIS device is playing as (by role)
   const localP  = myRole==='builder' ? builder : warrior;
   const remoteP = myRole==='builder' ? warrior  : builder;
 
-  updatePlayer(localP,inp);
   if(gameMode==='single'){
-    // AI builder
-    if(builder)aiBuilder();
-  } else {
-    updatePlayer(remoteP,remInp);
+    // ── SINGLE PLAYER: full simulation ──
+    updatePlayer(localP, inp);
+    aiBuilder();
+    for(const e of enemies)updateEnemy(e);
+    enemies=enemies.filter(e=>e.alive||e.hitFlash>0);
+    updateProjectiles();
+    updateStructures();
+    updateDrops();
+
+  } else if(gameMode==='host'){
+    // ── HOST: authoritative simulation ──
+    // Apply local input to own player
+    updatePlayer(localP, inp);
+    // Apply remote input (received from joiner) to remote player
+    updatePlayer(remoteP, remInp);
+    // Run all world simulation
+    for(const e of enemies)updateEnemy(e);
+    enemies=enemies.filter(e=>e.alive||e.hitFlash>0);
+    updateProjectiles();
+    updateStructures();
+    updateDrops();
+
+  } else if(gameMode==='join'){
+    // ── JOINER: only move own player locally for responsiveness ──
+    // Real positions come from host state packets
+    updatePlayer(localP, inp);
+    // Do NOT simulate enemies/projectiles/drops — host is authoritative
   }
 
-  for(const e of enemies)updateEnemy(e);
-  enemies=enemies.filter(e=>e.alive||e.hitFlash>0);
-  updateProjectiles();
-  updateStructures();
-  updateDrops();
   updateCam();
 
-  // Wave logic
-  waveT++;
-  if(enemies.filter(e=>e.alive).length===0&&enSpawn===0&&waveT>80){
-    if(wave<TOTAL_WAVES){startWave();}
-    else if(!bossActive){spawnBoss();}
-  }
-  if(enSpawn>0){
-    spawnT++;
-    if(spawnT>=Math.max(18,60-wave*4)){spawnT=0;enSpawn--;spawnEnemy();}
+  // Wave logic — only host/single runs this
+  if(gameMode!=='join'){
+    waveT++;
+    if(enemies.filter(e=>e.alive).length===0&&enSpawn===0&&waveT>80){
+      if(wave<TOTAL_WAVES){startWave();}
+      else if(!bossActive){spawnBoss();}
+    }
+    if(enSpawn>0){
+      spawnT++;
+      if(spawnT>=Math.max(18,60-wave*4)){spawnT=0;enSpawn--;spawnEnemy();}
+    }
   }
 
-  // Boss survival timer + continuous horde during boss fight
-  if(bossActive){
+  // Boss survival timer + continuous horde — only on host/single
+  if(bossActive&&gameMode!=='join'){
     bossTimer++;
     const remain=90-~~(bossTimer/60);
     $('timerDisp').textContent='⏱ '+Math.max(0,remain);
@@ -1523,13 +1541,76 @@ function loop(){
   const lp=localP;
   if(lp)$('specFill').style.height=(lp.specCharge*100)+'%';
 
-  // Send to peer
+  // ── Network sync ──
   if(conn&&conn.open){
-    conn.send(JSON.stringify({t:'i',x:inp.x,y:inp.y,atk:inp.atk,spec:inp.spec,coll:inp.coll}));
+    if(gameMode==='host'){
+      // Host sends full world state every frame (throttle to ~20fps for bandwidth)
+      if(frameN%3===0){
+        hostBroadcast();
+      }
+    } else if(gameMode==='join'){
+      // Joiner sends only its inputs every frame
+      conn.send(JSON.stringify({
+        t:'i',
+        x:inp.x, y:inp.y,
+        atk:inp.atk, spec:inp.spec,
+        jump:inp.jump
+      }));
+    }
   }
 
   render();
   requestAnimationFrame(loop);
+}
+
+// ── Host packs and sends full world state ──
+function hostBroadcast(){
+  if(!conn||!conn.open) return;
+  try{
+    // Pack enemies (only alive ones, minimal fields)
+    const eArr = enemies.filter(e=>e.alive||e.hitFlash>0).map(e=>({
+      id:e._id, type:e.type,
+      x:~~e.x, y:~~e.y,
+      hp:~~e.hp, mhp:~~e.maxHp,
+      dir:e.dir, fr:e.frame%4,
+      hf:e.hitFlash>0?1:0,
+      frz:e.frozen>0?1:0,
+      alive:e.alive?1:0
+    }));
+    // Pack drops
+    const dArr = drops.map(d=>({
+      type:d.type, x:~~d.x, y:~~d.y, bt:~~(d.bobT*10)
+    }));
+    // Pack projectiles
+    const pArr = projectiles.map(p=>({
+      x:~~p.x, y:~~p.y,
+      ie:p.isEnemy?1:0, c:p.color
+    }));
+    // Pack both players
+    const wp = warrior ? {x:~~warrior.x,y:~~warrior.y,hp:~~warrior.hp,dir:warrior.dir,fr:warrior.frame%4,alive:warrior.alive?1:0,inv:warrior.inv>0?1:0} : null;
+    const bp = builder ? {x:~~builder.x,y:~~builder.y,hp:~~builder.hp,dir:builder.dir,fr:builder.frame%4,alive:builder.alive?1:0,inv:builder.inv>0?1:0} : null;
+    // Pack egg + materials + structures
+    const eggD = egg ? {hp:~~egg.hp, mhp:~~egg.maxHp} : null;
+    const structs = structures.filter(s=>s.alive!==false).map(s=>({
+      type:s.type, x:~~s.x, y:~~s.y, w:s.w, h:s.h,
+      hp:s.hp?~~s.hp:null, mhp:s.maxHp?~~s.maxHp:null,
+      life:s.life?~~s.life:null
+    }));
+
+    conn.send(JSON.stringify({
+      t:'world',
+      w:wp, b:bp,
+      e:eArr, d:dArr, p:pArr,
+      egg:eggD,
+      mats:materials,
+      ns:nestStage,
+      structs:structs,
+      wave:wave,
+      score:score,
+      bossActive:bossActive?1:0,
+      bossTimer:bossTimer
+    }));
+  }catch(err){ console.warn('broadcast error',err); }
 }
 
 // ══════════════════════════════════════════════
@@ -2059,18 +2140,106 @@ function setupConn(c){
   c.on('data',d=>{
     try{
       const msg=typeof d==='string'?JSON.parse(d):d;
+
+      // ── Role assignment (joiner receives from host) ──
       if(msg.t==='role'){
-        // Only act on first role message (ignore retry duplicate)
         if(gameMode==='join'&&running) return;
         myRole=msg.role;
         if(msg.waves) TOTAL_WAVES=msg.waves;
-        gameMode='join'; // ensure gameMode is set before initGame
+        gameMode='join';
         setTimeout(()=>initGame('join',myRole),400);
+        return;
       }
-      if(msg.t==='i') remInp={x:msg.x,y:msg.y,atk:msg.atk,spec:msg.spec,coll:msg.coll};
-      if(msg.t==='sync'){
-        const rp=gameMode==='join'?warrior:builder;
-        if(rp&&msg.x!==undefined){rp.x=msg.x;rp.y=msg.y;rp.hp=msg.hp;rp.alive=msg.al;rp.dir=msg.dir;rp.frame=msg.fr;}
+
+      // ── Input from joiner (host receives) ──
+      if(msg.t==='i'){
+        remInp={x:msg.x,y:msg.y,atk:msg.atk,spec:msg.spec,
+                coll:msg.coll,jump:msg.jump||false};
+        return;
+      }
+
+      // ── Full world state from host (joiner receives) ──
+      if(msg.t==='world' && gameMode==='join'){
+        // Apply player positions
+        const remP = myRole==='builder' ? warrior : builder;
+        const locP = myRole==='builder' ? builder : warrior;
+        if(msg.w && warrior){
+          if(myRole!=='warrior'){ // remote for joiner-builder
+            warrior.x=msg.w.x; warrior.y=msg.w.y;
+            warrior.hp=msg.w.hp; warrior.dir=msg.w.dir;
+            warrior.frame=msg.w.fr; warrior.alive=!!msg.w.alive;
+            warrior.inv=msg.w.inv?50:0;
+          } else { // local warrior — trust host HP/alive but keep our own x/y
+            warrior.hp=msg.w.hp; warrior.alive=!!msg.w.alive;
+          }
+        }
+        if(msg.b && builder){
+          if(myRole!=='builder'){
+            builder.x=msg.b.x; builder.y=msg.b.y;
+            builder.hp=msg.b.hp; builder.dir=msg.b.dir;
+            builder.frame=msg.b.fr; builder.alive=!!msg.b.alive;
+            builder.inv=msg.b.inv?50:0;
+          } else {
+            builder.hp=msg.b.hp; builder.alive=!!msg.b.alive;
+          }
+        }
+        // Apply enemies
+        if(msg.e){
+          // Merge: update existing by _id, add new, remove gone
+          const ids=new Set(msg.e.map(e=>e.id));
+          // Remove enemies not in host state
+          enemies=enemies.filter(e=>ids.has(e._id));
+          for(const se of msg.e){
+            let local=enemies.find(e=>e._id===se.id);
+            if(!local){
+              // New enemy — create shell
+              local=mkEnemy(se.type, se.x);
+              local._id=se.id;
+              enemies.push(local);
+            }
+            local.x=se.x; local.y=se.y;
+            local.hp=se.hp; local.maxHp=se.mhp;
+            local.dir=se.dir; local.frame=se.fr;
+            local.hitFlash=se.hf?8:0;
+            local.frozen=se.frz?30:0;
+            local.alive=!!se.alive;
+          }
+        }
+        // Apply drops
+        if(msg.d){
+          drops=msg.d.map(d=>({
+            type:d.type, x:d.x, y:d.y,
+            bobT:d.bt/10, alive:true, life:600, w:14, h:14
+          }));
+        }
+        // Apply projectiles
+        if(msg.p){
+          projectiles=msg.p.map(p=>({
+            x:p.x, y:p.y, vx:0, vy:0, w:8, h:8,
+            isEnemy:!!p.ie, color:p.c, dmg:0, alive:true, life:10
+          }));
+        }
+        // Apply egg
+        if(msg.egg && egg){
+          egg.hp=msg.egg.hp; egg.maxHp=msg.egg.mhp;
+          $('hpEgg').style.width=Math.max(0,egg.hp/egg.maxHp*100)+'%';
+        }
+        // Apply materials + nest
+        if(msg.mats){ Object.assign(materials,msg.mats); updateMatHUD(); }
+        if(msg.ns!==undefined && msg.ns!==nestStage){
+          nestStage=msg.ns;
+          // Rebuild structures from host data
+        }
+        if(msg.structs){ structures=msg.structs.map(s=>({...s,alive:true})); }
+        // Apply score + wave
+        if(msg.score!==undefined){ score=msg.score; $('scoreDisp').textContent=score; }
+        if(msg.wave!==undefined && msg.wave!==wave){
+          wave=msg.wave;
+          $('waveDisp').textContent=wave>=TOTAL_WAVES?'⚠ FINAL WAVE':'WAVE '+wave;
+        }
+        if(msg.bossActive){ bossActive=true; bossTimer=msg.bossTimer||0; }
+        updateHPBars();
+        return;
       }
     }catch(e){ console.warn('data parse error',e); }
   });
