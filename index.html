@@ -2063,6 +2063,38 @@ function base62ToUint8(str){
 }
 
 // ── Host flow ──
+// ── Reliable ICE gathering: resolves when null candidate fires OR timeout ──
+function waitForICE(pc, onProgress){
+  return new Promise(resolve=>{
+    let done=false;
+    let candidates=0;
+    function finish(){
+      if(done) return;
+      done=true;
+      resolve(pc.localDescription);
+    }
+    pc.onicecandidate=e=>{
+      if(e.candidate){
+        candidates++;
+        if(onProgress) onProgress('Gathering… ('+candidates+' candidates)');
+      } else {
+        // null candidate = gathering complete
+        finish();
+      }
+    };
+    pc.onicegatheringstatechange=()=>{
+      if(pc.iceGatheringState==='complete') finish();
+    };
+    // Fallback: after 5s, use whatever we have
+    setTimeout(()=>{
+      if(!done){
+        if(onProgress) onProgress('Using partial ICE ('+candidates+' candidates)');
+        finish();
+      }
+    }, 5000);
+  });
+}
+
 async function showHost(){
   showScreen('lobbyScreen');
   $('lobbyTitle').textContent='HOST GAME';
@@ -2072,54 +2104,60 @@ async function showHost(){
   $('hostQRWrap').style.display='none';
   $('hostScanWrap').style.display='none';
   $('hostSpin').style.display='block';
-  $('hostStat').textContent='Creating connection…';
+  $('hostStat').textContent='Creating offer…';
+
+  if(peerConn){ try{peerConn.close();}catch(e){} peerConn=null; }
 
   peerConn=new RTCPeerConnection({iceServers:[
     {urls:'stun:stun.l.google.com:19302'},
-    {urls:'stun:stun1.l.google.com:19302'}
+    {urls:'stun:stun1.l.google.com:19302'},
+    {urls:'stun:stun2.l.google.com:19302'},
+    {urls:'stun:stun3.l.google.com:19302'}
   ]});
   dataChan=peerConn.createDataChannel('game',{ordered:false,maxRetransmits:0});
   setupChan(dataChan);
 
-  peerConn.onicegatheringstatechange=async()=>{
-    if(peerConn.iceGatheringState==='complete'){
-      $('hostSpin').style.display='none';
-      try {
-        const code = await sdpEncode(peerConn.localDescription);
-        // Store in textarea fallback too
-        $('hostSDP').value = code;
-        // Build URL so friend's camera app opens the game directly
-        const url = location.href.split('?')[0]+'?join='+encodeURIComponent(code);
-        // Draw QR code
-        $('hostQRWrap').style.display='flex';
-        drawQR('hostQR', url);
-        $('hostStat').textContent='Friend scans the QR → then show you their QR';
-        // Start scanning for answer QR after a short delay
-        setTimeout(()=>{
-          $('hostScanWrap').style.display='flex';
-          startScanner('hostScanVideo','hostScanCanvas','hostScanStat', async(code)=>{
-            stopScanner('hostScanVideo');
-            $('hostStat').textContent='Got answer! Connecting…';
-            try{
-              const ans=await sdpDecode(code);
-              await peerConn.setRemoteDescription(ans);
-            }catch(e){ $('hostStat').textContent='❌ Bad QR — try again'; }
-          });
-        },1500);
-      } catch(e){ $('hostStat').textContent='Error: '+e.message; }
-    }
-  };
   peerConn.oniceconnectionstatechange=()=>{
     if(peerConn.iceConnectionState==='connected'||peerConn.iceConnectionState==='completed'){
       stopScanner('hostScanVideo');
       $('hostStat').textContent='✅ Connected! Starting…';
       const oppRole=peerRole==='warrior'?'builder':'warrior';
-      dataChan.send(JSON.stringify({t:'role',role:oppRole,waves:TOTAL_WAVES}));
+      try{ dataChan.send(JSON.stringify({t:'role',role:oppRole,waves:TOTAL_WAVES})); }catch(e){}
       setTimeout(()=>initGame('host',peerRole),1400);
     }
   };
-  const offer=await peerConn.createOffer();
-  await peerConn.setLocalDescription(offer);
+
+  try{
+    const offer=await peerConn.createOffer();
+    await peerConn.setLocalDescription(offer);
+    $('hostStat').textContent='Gathering network info…';
+
+    // Wait reliably for ICE gathering
+    const desc = await waitForICE(peerConn, msg=>{ $('hostStat').textContent=msg; });
+
+    $('hostSpin').style.display='none';
+    const code = await sdpEncode(desc);
+    $('hostSDP').value = code;
+
+    const url = location.href.split('?')[0]+'?join='+encodeURIComponent(code);
+    $('hostQRWrap').style.display='flex';
+    drawQR('hostQR', url);
+    $('hostStat').textContent='Step 1: Friend scans QR above';
+
+    // Start scanning for answer after QR is shown
+    setTimeout(()=>{
+      $('hostScanWrap').style.display='flex';
+      startScanner('hostScanVideo','hostScanCanvas','hostScanStat', async(scanned)=>{
+        stopScanner('hostScanVideo');
+        $('hostStat').textContent='Received answer, connecting…';
+        try{
+          const ans=await sdpDecode(scanned);
+          await peerConn.setRemoteDescription(ans);
+          $('hostStat').textContent='Connecting…';
+        }catch(e){ $('hostStat').textContent='Bad QR, try the manual code below'; }
+      });
+    },800);
+  } catch(e){ $('hostStat').textContent='Error: '+e.message; console.error(e); }
 }
 
 async function acceptAnswer(){
@@ -2175,39 +2213,45 @@ function showJoin(){
 }
 
 async function doJoin(rawCode){
-  const raw = rawCode || $('offerArea').value.trim();
-  if(!raw){$('joinStat').textContent='Paste or scan the host code first';return;}
+  const raw = rawCode || ($('offerArea')?$('offerArea').value.trim():'');
+  if(!raw){ $('joinStat').textContent='No offer code found'; return; }
+  $('joinStat').textContent='Decoding offer…';
+
+  if(peerConn){ try{peerConn.close();}catch(e){} peerConn=null; }
+
   try{
     const offer=await sdpDecode(raw);
     peerConn=new RTCPeerConnection({iceServers:[
       {urls:'stun:stun.l.google.com:19302'},
-      {urls:'stun:stun1.l.google.com:19302'}
+      {urls:'stun:stun1.l.google.com:19302'},
+      {urls:'stun:stun2.l.google.com:19302'},
+      {urls:'stun:stun3.l.google.com:19302'}
     ]});
     peerConn.ondatachannel=e=>{dataChan=e.channel;setupChan(dataChan);};
-    peerConn.onicegatheringstatechange=async()=>{
-      if(peerConn.iceGatheringState==='complete'){
-        try{
-          const code=await sdpEncode(peerConn.localDescription);
-          $('joinSDP').value=code;
-          $('joinSDP').style.display='block';
-          // Show answer QR
-          $('joinScanWrap').style.display='none';
-          $('joinQRWrap').style.display='flex';
-          drawQR('joinQR', code); // just the code, host will paste or scan
-          $('joinStat').textContent='Show this QR to the host';
-        }catch(e){$('joinStat').textContent='Error: '+e.message;}
-      }
-    };
     peerConn.oniceconnectionstatechange=()=>{
       if(peerConn.iceConnectionState==='connected'||peerConn.iceConnectionState==='completed'){
         $('joinStat').textContent='✅ Connected! Waiting for host…';
       }
     };
+
     await peerConn.setRemoteDescription(offer);
+    $('joinStat').textContent='Creating answer…';
     const answer=await peerConn.createAnswer();
     await peerConn.setLocalDescription(answer);
-    $('joinStat').textContent='Generating answer QR…';
-  }catch(e){$('joinStat').textContent='❌ '+e.message;}
+    $('joinStat').textContent='Gathering network info…';
+
+    // Wait reliably for ICE
+    const desc = await waitForICE(peerConn, msg=>{ $('joinStat').textContent=msg; });
+
+    const code=await sdpEncode(desc);
+    if($('joinSDP')) { $('joinSDP').value=code; $('joinSDP').style.display='block'; }
+
+    // Show answer QR
+    $('joinScanWrap').style.display='none';
+    $('joinQRWrap').style.display='flex';
+    drawQR('joinQR', code);
+    $('joinStat').textContent='Step 2: Show this QR to the host';
+  }catch(e){ $('joinStat').textContent='Error: '+e.message; console.error(e); }
 }
 
 // Manual join fallback
