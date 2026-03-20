@@ -806,7 +806,10 @@ function updatePlayer(p,k){
   if(p.specT<=0)p.specCharge=Math.min(1,p.specCharge+.002);else p.specCharge=0;
 
   if(k.atk&&p.atkT<=0){p.atkT=22;meleeAtk(p);}
-  if(k.spec&&p.specT<=0&&p.specCharge>=1){p.specT=100;p.specCharge=0;doSpecial(p);}
+  if(k.spec&&p.specT<=0){
+    if(p.role==='warrior'){p.specT=6;doSpecial(p);}  // warrior: rapid fire, tiny cooldown
+    else if(p.specCharge>=1){p.specT=100;p.specCharge=0;doSpecial(p);}  // builder: needs charge
+  }
 
   // Builder collect
   if(p.role==='builder'&&(k.coll||true)){autoCollect(p);}
@@ -838,7 +841,7 @@ function autoCollect(p){
 }
 
 function meleeAtk(p){
-  const hb={x:p.dir>0?p.x+p.w:p.x-28,y:p.y,w:28,h:p.h};
+  const hb={x:p.dir>0?p.x+p.w:p.x-52,y:p.y-8,w:52,h:p.h+16};
   let hit=false;
   for(const e of enemies){
     if(!e.alive)continue;
@@ -849,13 +852,9 @@ function meleeAtk(p){
 
 function doSpecial(p){
   if(p.role==='warrior'){
-    // Fire dash — damages all enemies in path
-    for(let i=0;i<4;i++){
-      setTimeout(()=>{
-        projectiles.push(mkProj(p.x+p.dir*10,p.y+p.h/2,p.dir*8,0,false,'#ff6600',40));
-        mkPart(p.x,p.y+p.h/2,'#ff6600',4);
-      },i*60);
-    }
+    // Rapid-fire projectile — one per trigger (no cooldown = held fire)
+    projectiles.push(mkProj(p.x+p.dir*10, p.y+p.h/2, p.dir*9, 0, false,'#ff6600',35));
+    mkPart(p.x+p.dir*14, p.y+p.h/2,'#ff8800',3);
   } else {
     // Builder: collect ALL drops on screen instantly + build boost
     for(const d of drops){
