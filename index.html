@@ -108,18 +108,36 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--dark);font-fam
 
 /* ── GAME ── */
 #gameScreen{background:#000;}
-canvas#gc{display:block;image-rendering:pixelated;position:absolute;top:72px;left:0;right:0;bottom:140px;}
+canvas#gc{display:block;image-rendering:pixelated;position:absolute;top:76px;left:0;right:0;bottom:140px;}
 
 /* HUD */
 #hud{
-  position:absolute;top:0;left:0;right:0;height:48px;
-  background:rgba(0,0,0,.8);border-bottom:1px solid rgba(245,200,66,.2);
-  display:flex;align-items:center;padding:0 8px;gap:6px;z-index:20;
+  position:absolute;top:0;left:0;right:0;height:52px;
+  background:linear-gradient(180deg,rgba(0,0,0,.92) 0%,rgba(6,4,2,.85) 100%);
+  border-bottom:1px solid rgba(245,200,66,.25);
+  display:flex;align-items:center;padding:0 10px;gap:8px;z-index:20;
+  box-shadow:0 2px 12px rgba(0,0,0,.6);
 }
-.hud-block{display:flex;align-items:center;gap:4px;flex:1;}
-.hud-lbl{font-size:.38rem;color:rgba(255,255,255,.5);font-weight:600;white-space:nowrap;font-family:'Exo 2',sans-serif;}
-.bar-wrap{flex:1;height:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);border-radius:2px;overflow:hidden;}
-.bar-fill{height:100%;border-radius:2px;transition:width .25s;}
+.hud-block{display:flex;align-items:center;gap:5px;flex:1;min-width:0;}
+.hud-lbl{
+  font-size:.55rem;color:rgba(255,255,255,.55);font-weight:700;
+  white-space:nowrap;font-family:'Exo 2',sans-serif;line-height:1;
+}
+.hud-hp-wrap{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0;}
+.hud-name{font-size:.3rem;color:rgba(255,255,255,.35);font-family:'Exo 2',sans-serif;letter-spacing:1px;}
+.bar-wrap{
+  flex:1;height:10px;background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.12);border-radius:4px;overflow:hidden;
+  position:relative;
+}
+.bar-fill{height:100%;border-radius:4px;transition:width .2s;}
+/* Regen shimmer on bar */
+@keyframes regenShimmer{0%{opacity:.4}50%{opacity:.9}100%{opacity:.4}}
+.bar-regen::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent);
+  animation:regenShimmer 1.5s ease-in-out infinite;
+}
 .bar-warrior{background:linear-gradient(90deg,#e83030,#ff6060);box-shadow:0 0 6px #e83030;}
 .bar-builder{background:linear-gradient(90deg,#30a8e8,#60d0ff);box-shadow:0 0 6px #30a8e8;}
 .bar-egg{background:linear-gradient(90deg,#f5c842,#ffe080);box-shadow:0 0 6px #f5c842;}
@@ -138,15 +156,18 @@ canvas#gc{display:block;image-rendering:pixelated;position:absolute;top:72px;lef
   padding:10px 16px;z-index:20;pointer-events:none;
 }
 #joystickZone{
-  width:120px;height:120px;border-radius:50%;
-  background:rgba(255,255,255,.04);border:1.5px solid rgba(255,255,255,.15);
+  width:150px;height:150px;border-radius:50%;
+  background:rgba(255,255,255,.03);border:1.5px solid rgba(255,255,255,.1);
   position:relative;pointer-events:all;flex-shrink:0;
+  /* floating joystick: knob moves to finger, zone is invisible touch target */
 }
 #joystickKnob{
-  width:44px;height:44px;border-radius:50%;
-  background:rgba(245,200,66,.4);border:2px solid rgba(245,200,66,.7);
+  width:52px;height:52px;border-radius:50%;
+  background:radial-gradient(circle at 35% 35%, rgba(255,220,80,.7), rgba(245,200,66,.35));
+  border:2px solid rgba(245,200,66,.8);
   position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  box-shadow:0 0 12px rgba(245,200,66,.4);transition:none;pointer-events:none;
+  box-shadow:0 0 16px rgba(245,200,66,.5), inset 0 0 8px rgba(255,255,255,.1);
+  transition:none;pointer-events:none;
 }
 .act-btns{display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:all;}
 .act-row{display:flex;gap:8px;}
@@ -281,27 +302,40 @@ canvas#gc{display:block;image-rendering:pixelated;position:absolute;top:72px;lef
 <div id="gameScreen" class="screen">
   <!-- HUD -->
   <div id="hud">
+    <!-- Warrior HP -->
     <div class="hud-block" id="warriorHud">
-      <span class="hud-lbl">⚔</span>
-      <div class="bar-wrap"><div class="bar-fill bar-warrior" id="hpWarrior" style="width:100%"></div></div>
+      <span class="hud-lbl">⚔️</span>
+      <div class="hud-hp-wrap">
+        <div class="hud-name">WARRIOR</div>
+        <div class="bar-wrap"><div class="bar-fill bar-warrior" id="hpWarrior" style="width:100%"></div></div>
+      </div>
     </div>
+    <!-- Center info -->
     <div class="hud-center">
       <div class="hud-wave" id="waveDisp">WAVE 1</div>
       <div class="hud-score" id="scoreDisp">0</div>
       <div class="hud-timer" id="timerDisp" style="display:none">⏱ 90</div>
     </div>
+    <!-- Builder HP -->
     <div class="hud-block" id="builderHud" style="display:none">
-      <div class="bar-wrap"><div class="bar-fill bar-builder" id="hpBuilder" style="width:100%"></div></div>
-      <span class="hud-lbl">🏗</span>
+      <div class="hud-hp-wrap">
+        <div class="hud-name">BUILDER</div>
+        <div class="bar-wrap"><div class="bar-fill bar-builder" id="hpBuilder" style="width:100%"></div></div>
+      </div>
+      <span class="hud-lbl">🏗️</span>
     </div>
-    <div class="hud-block" style="max-width:90px">
+    <!-- Egg HP -->
+    <div class="hud-block" style="max-width:100px">
       <span class="hud-lbl">🥚</span>
-      <div class="bar-wrap"><div class="bar-fill bar-egg" id="hpEgg" style="width:100%"></div></div>
+      <div class="hud-hp-wrap">
+        <div class="hud-name">EGG</div>
+        <div class="bar-wrap"><div class="bar-fill bar-egg" id="hpEgg" style="width:100%"></div></div>
+      </div>
     </div>
   </div>
 
   <!-- Materials HUD row -->
-  <div id="matHud" style="position:absolute;top:48px;left:0;right:0;background:rgba(0,0,0,.6);
+  <div id="matHud" style="position:absolute;top:52px;left:0;right:0;background:rgba(0,0,0,.6);
     border-bottom:1px solid rgba(245,200,66,.12);padding:3px 8px;display:none;
     flex-wrap:wrap;gap:6px;align-items:center;z-index:19;height:24px;">
     <span style="font-size:.35rem;color:rgba(245,200,66,.5);font-weight:600;">MATERIALS:</span>
@@ -719,6 +753,25 @@ function collide(e){
   e.x=Math.max(20,Math.min(WORLD-e.w-20,e.x));
 }
 
+// Push a player out of any overlapping enemies so they never get stuck
+function separateFromEnemies(p){
+  for(const e of enemies){
+    if(!e.alive) continue;
+    const overlapX = (p.x+p.w) - e.x;
+    const overlapX2 = (e.x+e.w) - p.x;
+    const overlapY = (p.y+p.h) - e.y;
+    const overlapY2 = (e.y+e.h) - p.y;
+    if(overlapX>0 && overlapX2>0 && overlapY>0 && overlapY2>0){
+      // Find the smallest push axis
+      const pushX = overlapX < overlapX2 ? -overlapX : overlapX2;
+      // Only push horizontally — vertical is handled by platform collide
+      p.x -= pushX * 0.4;
+      p.vx -= pushX * 0.15; // add a little bounce
+    }
+  }
+  p.x=Math.max(20,Math.min(WORLD-p.w-20,p.x));
+}
+
 // ══════════════════════════════════════════════
 // ENTITIES
 // ══════════════════════════════════════════════
@@ -795,15 +848,27 @@ function buildStage(idx){
 // ══════════════════════════════════════════════
 function updatePlayer(p,k){
   if(!p||!p.alive)return;
-  // Analog joystick movement
-  p.vx=k.x*PSPD;
-  if(Math.abs(k.x)>.05)p.dir=k.x>0?1:-1;
+  // Smooth analog movement — accelerate toward target speed, friction when releasing
+  const targetVx = k.x * PSPD;
+  if(Math.abs(k.x) > 0.08){
+    p.vx += (targetVx - p.vx) * (p.onGround ? 0.28 : 0.12); // faster response on ground
+    p.dir = k.x > 0 ? 1 : -1;
+  } else {
+    p.vx *= p.onGround ? 0.72 : 0.92; // ground friction vs air friction
+    if(Math.abs(p.vx)<0.1) p.vx=0;
+  }
   if((k.y<-.3||k.jump)&&p.onGround){p.vy=JFORCE;mkPart(p.x+p.w/2,p.y+p.h,'#aaaaff',4);}
   p.vy+=GRAV;p.x+=p.vx;p.y+=p.vy;
   collide(p);
+  separateFromEnemies(p);
   p.ft++;if(p.ft>8){p.frame++;p.ft=0;}
   if(p.atkT>0)p.atkT--;if(p.specT>0)p.specT--;if(p.inv>0)p.inv--;
   if(p.specT<=0)p.specCharge=Math.min(1,p.specCharge+.002);else p.specCharge=0;
+  // Passive health regen — 1 HP every 3 seconds (only when not recently hit)
+  if(p.inv<=0 && p.hp < p.maxHp){
+    p.regenT=(p.regenT||0)+1;
+    if(p.regenT>=180){ p.hp=Math.min(p.maxHp, p.hp+1); p.regenT=0; updateHPBars(); }
+  } else { p.regenT=0; }
 
   if(k.atk&&p.atkT<=0){p.atkT=22;meleeAtk(p);}
   if(k.spec&&p.specT<=0){
@@ -1556,7 +1621,7 @@ function initGame(mode,role){
   W=window.innerWidth;
   // Canvas height is driven by CSS (top:72px, bottom:140px)
   // Read actual rendered size so GY is always correct
-  H=window.innerHeight-72-140;
+  H=window.innerHeight-76-140;
   GY=H-30;
   gc.width=W;gc.height=H;
   CAM=0;score=0;wave=0;waveT=300;enSpawn=0;spawnT=0;
@@ -1608,8 +1673,26 @@ function initGame(mode,role){
 }
 
 function updateHPBars(){
-  if(warrior)$('hpWarrior').style.width=Math.max(0,warrior.hp/warrior.maxHp*100)+'%';
-  if(builder)$('hpBuilder').style.width=Math.max(0,builder.hp/builder.maxHp*100)+'%';
+  function setBar(el,p){
+    if(!p||!el) return;
+    const pct=Math.max(0,p.hp/p.maxHp*100);
+    el.style.width=pct+'%';
+    // Pulse bar red when low HP
+    if(pct<25) el.style.animation='lowHpPulse .6s ease-in-out infinite';
+    else el.style.animation='';
+    // Regen shimmer when healing
+    const wrap=el.parentElement;
+    if(wrap){ if(pct<100&&p.inv<=0) wrap.classList.add('bar-regen'); else wrap.classList.remove('bar-regen'); }
+  }
+  setBar($('hpWarrior'),warrior);
+  setBar($('hpBuilder'),builder);
+}
+// Low HP pulse keyframe injected once
+if(!document.getElementById('lowHpStyle')){
+  const s=document.createElement('style');
+  s.id='lowHpStyle';
+  s.textContent='@keyframes lowHpPulse{0%,100%{opacity:1}50%{opacity:.4}}';
+  document.head.appendChild(s);
 }
 function updateMatHUD(){
   for(const k of['wood','bone','stone','crystal','core']){
@@ -1686,31 +1769,55 @@ function overlap(a,b){return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
 // ══════════════════════════════════════════════
 function setupJoystick(){
   const zone=$('joystickZone'),knob=$('joystickKnob');
-  const R=52; // max radius
+  const R=62;        // max knob travel radius
+  const DEAD=0.12;   // dead zone — ignore tiny accidental nudges
   let tid=null,ox=0,oy=0;
 
   function start(e){
     const t=e.touches?e.touches[0]:e;
+    tid = e.touches ? t.identifier : -1;
+    // Floating origin: joystick starts exactly where finger lands
+    ox=t.clientX; oy=t.clientY;
+    // Re-center the zone visually under the finger
     const r=zone.getBoundingClientRect();
-    ox=r.left+r.width/2;oy=r.top+r.height/2;tid=t.identifier;
-    move(e);
+    const zx=t.clientX-r.left, zy=t.clientY-r.top;
+    knob.style.left=zx+'px'; knob.style.top=zy+'px';
+    knob.style.transform='translate(-50%,-50%)';
+    inp.x=0; inp.y=0;
   }
   function move(e){
     e.preventDefault();
     const touches=e.touches||[e];
     let t=null;
-    for(const tt of touches){if(tt.identifier===tid||!e.touches)t=tt;}
-    if(!t)return;
-    const dx=t.clientX-ox,dy=t.clientY-oy;
+    for(const tt of touches){ if(tt.identifier===tid||!e.touches){ t=tt; break; } }
+    if(!t) return;
+    const dx=t.clientX-ox, dy=t.clientY-oy;
     const dist=Math.sqrt(dx*dx+dy*dy);
-    const clamp=Math.min(dist,R);
-    const nx=dist>0?dx/dist*clamp:0,ny=dist>0?dy/dist*clamp:0;
-    knob.style.transform=`translate(calc(-50% + ${nx}px), calc(-50% + ${ny}px))`;
-    inp.x=nx/R;inp.y=ny/R;
+    const clamped=Math.min(dist,R);
+    const nx=dist>0?dx/dist*clamped:0, ny=dist>0?dy/dist*clamped:0;
+    // Move knob visually
+    const r=zone.getBoundingClientRect();
+    const baseX=ox-r.left, baseY=oy-r.top;
+    knob.style.left=(baseX+nx)+'px';
+    knob.style.top =(baseY+ny)+'px';
+    knob.style.transform='translate(-50%,-50%)';
+    // Analog value with dead zone + squared curve for fine control near center
+    let ax=nx/R, ay=ny/R;
+    const mag=Math.sqrt(ax*ax+ay*ay);
+    if(mag < DEAD){ ax=0; ay=0; }
+    else {
+      // Remap from dead zone edge to 1.0 for smooth feel
+      const scale=(mag-DEAD)/(1-DEAD);
+      ax = ax/mag * scale;
+      ay = ay/mag * scale;
+    }
+    inp.x=ax; inp.y=ay;
   }
   function end(){
+    // Reset knob to center of zone
+    knob.style.left='50%'; knob.style.top='50%';
     knob.style.transform='translate(-50%,-50%)';
-    inp.x=0;inp.y=0;tid=null;
+    inp.x=0; inp.y=0; tid=null;
   }
   zone.addEventListener('touchstart', start, {passive:false});
   // touchmove on DOCUMENT so sliding outside the zone still works
@@ -1913,7 +2020,7 @@ function backMenu(){running=false;if(peerConn){peerConn.close();peerConn=null;}s
 // Resize
 window.addEventListener('resize',()=>{
   if(running){
-    W=window.innerWidth;H=window.innerHeight-72-140;GY=H-30;
+    W=window.innerWidth;H=window.innerHeight-76-140;GY=H-30;
     gc.width=W;gc.height=H;buildWorld();
   }
 });
