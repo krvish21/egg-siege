@@ -510,6 +510,7 @@ let score=0, wave=0, enSpawn=0, spawnT=0, waveT=0;
 let running=false, bossActive=false, bossTimer=0;
 let frameN=0;
 let egg=null;
+let hostGY=0; // host's ground level, received by joiner
 let materials={wood:0,bone:0,stone:0,crystal:0,core:0};
 let nestStage=0; // 0-5
 const NEST_X=60, NEST_W=240; // nest zone in world coords
@@ -1549,12 +1550,16 @@ function loop(){
         hostBroadcast();
       }
     } else if(gameMode==='join'){
-      // Joiner sends only its inputs every frame
+      // Joiner sends inputs + own player position to host
+      const lp = myRole==='builder' ? builder : warrior;
       conn.send(JSON.stringify({
         t:'i',
         x:inp.x, y:inp.y,
         atk:inp.atk, spec:inp.spec,
-        jump:inp.jump
+        jump:inp.jump,
+        // Send own player pos so host can use it for authoritative combat
+        px: lp ? ~~lp.x : 0,
+        py: lp ? ~~lp.y : 0
       }));
     }
   }
@@ -1590,7 +1595,7 @@ function hostBroadcast(){
     const wp = warrior ? {x:~~warrior.x,y:~~warrior.y,hp:~~warrior.hp,dir:warrior.dir,fr:warrior.frame%4,alive:warrior.alive?1:0,inv:warrior.inv>0?1:0} : null;
     const bp = builder ? {x:~~builder.x,y:~~builder.y,hp:~~builder.hp,dir:builder.dir,fr:builder.frame%4,alive:builder.alive?1:0,inv:builder.inv>0?1:0} : null;
     // Pack egg + materials + structures
-    const eggD = egg ? {hp:~~egg.hp, mhp:~~egg.maxHp} : null;
+    const eggD = egg ? {hp:~~egg.hp, mhp:~~egg.maxHp, y:~~egg.y} : null;
     const structs = structures.filter(s=>s.alive!==false).map(s=>({
       type:s.type, x:~~s.x, y:~~s.y, w:s.w, h:s.h,
       hp:s.hp?~~s.hp:null, mhp:s.maxHp?~~s.maxHp:null,
@@ -1608,7 +1613,9 @@ function hostBroadcast(){
       wave:wave,
       score:score,
       bossActive:bossActive?1:0,
-      bossTimer:bossTimer
+      bossTimer:bossTimer,
+      GY:GY,
+      WORLD:WORLD
     }));
   }catch(err){ console.warn('broadcast error',err); }
 }
@@ -2155,27 +2162,41 @@ function setupConn(c){
       if(msg.t==='i'){
         remInp={x:msg.x,y:msg.y,atk:msg.atk,spec:msg.spec,
                 coll:msg.coll,jump:msg.jump||false};
+        // Apply joiner player position if provided (keeps host in sync)
+        if(msg.px!==undefined){
+          const rp = gameMode==='host' ? (myRole==='warrior'?builder:warrior) : null;
+          if(rp && rp.alive){
+            // Blend joiner pos with host physics (0.6 trust joiner, 0.4 host)
+            rp.x = rp.x*0.4 + msg.px*0.6;
+            // Only accept y if it's close to expected (prevent teleport exploits)
+            if(Math.abs(msg.py - rp.y) < 200) rp.y = rp.y*0.5 + msg.py*0.5;
+          }
+        }
         return;
       }
 
       // ── Full world state from host (joiner receives) ──
       if(msg.t==='world' && gameMode==='join'){
+        // Sync ground level — remap all y coords from host GY to local GY
+        if(msg.GY) hostGY=msg.GY;
+        const yOff = GY - (hostGY||GY); // offset to add to all y values
+
         // Apply player positions
-        const remP = myRole==='builder' ? warrior : builder;
-        const locP = myRole==='builder' ? builder : warrior;
+        function applyY(hy){ return hy + yOff; }
+
         if(msg.w && warrior){
-          if(myRole!=='warrior'){ // remote for joiner-builder
-            warrior.x=msg.w.x; warrior.y=msg.w.y;
+          if(myRole!=='warrior'){
+            warrior.x=msg.w.x; warrior.y=applyY(msg.w.y);
             warrior.hp=msg.w.hp; warrior.dir=msg.w.dir;
             warrior.frame=msg.w.fr; warrior.alive=!!msg.w.alive;
             warrior.inv=msg.w.inv?50:0;
-          } else { // local warrior — trust host HP/alive but keep our own x/y
+          } else {
             warrior.hp=msg.w.hp; warrior.alive=!!msg.w.alive;
           }
         }
         if(msg.b && builder){
           if(myRole!=='builder'){
-            builder.x=msg.b.x; builder.y=msg.b.y;
+            builder.x=msg.b.x; builder.y=applyY(msg.b.y);
             builder.hp=msg.b.hp; builder.dir=msg.b.dir;
             builder.frame=msg.b.fr; builder.alive=!!msg.b.alive;
             builder.inv=msg.b.inv?50:0;
@@ -2197,7 +2218,7 @@ function setupConn(c){
               local._id=se.id;
               enemies.push(local);
             }
-            local.x=se.x; local.y=se.y;
+            local.x=se.x; local.y=applyY(se.y);
             local.hp=se.hp; local.maxHp=se.mhp;
             local.dir=se.dir; local.frame=se.fr;
             local.hitFlash=se.hf?8:0;
@@ -2208,20 +2229,21 @@ function setupConn(c){
         // Apply drops
         if(msg.d){
           drops=msg.d.map(d=>({
-            type:d.type, x:d.x, y:d.y,
+            type:d.type, x:d.x, y:applyY(d.y),
             bobT:d.bt/10, alive:true, life:600, w:14, h:14
           }));
         }
         // Apply projectiles
         if(msg.p){
           projectiles=msg.p.map(p=>({
-            x:p.x, y:p.y, vx:0, vy:0, w:8, h:8,
+            x:p.x, y:applyY(p.y), vx:0, vy:0, w:8, h:8,
             isEnemy:!!p.ie, color:p.c, dmg:0, alive:true, life:10
           }));
         }
         // Apply egg
         if(msg.egg && egg){
           egg.hp=msg.egg.hp; egg.maxHp=msg.egg.mhp;
+          if(msg.egg.y!==undefined) egg.y=applyY(msg.egg.y);
           $('hpEgg').style.width=Math.max(0,egg.hp/egg.maxHp*100)+'%';
         }
         // Apply materials + nest
@@ -2230,7 +2252,7 @@ function setupConn(c){
           nestStage=msg.ns;
           // Rebuild structures from host data
         }
-        if(msg.structs){ structures=msg.structs.map(s=>({...s,alive:true})); }
+        if(msg.structs){ structures=msg.structs.map(s=>({...s,y:applyY(s.y),alive:true})); }
         // Apply score + wave
         if(msg.score!==undefined){ score=msg.score; $('scoreDisp').textContent=score; }
         if(msg.wave!==undefined && msg.wave!==wave){
