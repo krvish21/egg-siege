@@ -904,14 +904,45 @@ function updateEnemy(e){
     else if(dist>250)e.vx=e.dir*(e.spd||1);
     else e.vx*=0.8;
     e.shootT++;
-    const sRate=e.isBoss?55:90;
-    if(e.shootT>sRate){
-      e.shootT=0;
-      const py=e.y+e.h*.3;
-      projectiles.push(mkProj(e.x+e.w/2,py,e.dir*4.5,0,true,e.isBoss?'#ff4400':'#aa44ff',e.dmg));
-      if(e.isBoss){
-        projectiles.push(mkProj(e.x+e.w/2,py,e.dir*4.5,.5,true,'#ff2200',e.dmg*.7));
-        projectiles.push(mkProj(e.x+e.w/2,py,e.dir*4.5,-.5,true,'#ff2200',e.dmg*.7));
+    const sRate = e.isBoss ? 40 : 90;
+    if(e.shootT > sRate){
+      e.shootT = 0;
+      const cx = e.x+e.w/2, cy = e.y+e.h*.3;
+      if(!e.isBoss){
+        // Regular wizard: single aimed shot
+        projectiles.push(mkProj(cx,cy,e.dir*4.5,0,true,'#aa44ff',e.dmg));
+      } else {
+        // Boss attack pattern — cycles through 4 modes
+        e.bossPhase = ((e.bossPhase||0) + 1) % 4;
+        switch(e.bossPhase){
+          case 0: // Horizontal spread — 5 shots left AND right
+            for(let d of[-1,1]){
+              for(let spread of[0, 0.4, -0.4, 0.8, -0.8]){
+                projectiles.push(mkProj(cx,cy, d*5, spread, true,'#ff4400',e.dmg*.6));
+              }
+            }
+            break;
+          case 1: // Full 360 ring burst — 8 directions
+            for(let a=0;a<8;a++){
+              const ang = (a/8)*Math.PI*2;
+              projectiles.push(mkProj(cx,cy, Math.cos(ang)*5, Math.sin(ang)*5, true,'#ff2200',e.dmg*.5));
+            }
+            break;
+          case 2: // Ground slam — 6 projectiles arc downward + 2 straight sideways
+            for(let i=-2;i<=2;i++){
+              projectiles.push(mkProj(cx,cy, i*1.5, 4+Math.abs(i)*0.5, true,'#ff6600',e.dmg*.55));
+            }
+            projectiles.push(mkProj(cx,cy,-7,0,true,'#ff0000',e.dmg*.8));
+            projectiles.push(mkProj(cx,cy, 7,0,true,'#ff0000',e.dmg*.8));
+            break;
+          case 3: // Aimed triple-burst at nearest player both L and R
+            for(let d of[-1,1]){
+              projectiles.push(mkProj(cx,cy, d*6,  0,   true,'#ff0080',e.dmg*.75));
+              projectiles.push(mkProj(cx,cy, d*5,  1.5, true,'#ff0080',e.dmg*.65));
+              projectiles.push(mkProj(cx,cy, d*5, -1.5, true,'#ff0080',e.dmg*.65));
+            }
+            break;
+        }
       }
     }
   } else {
@@ -923,14 +954,17 @@ function updateEnemy(e){
       e.vx = e.dir * (e.spd||1) * 0.5; // walk toward at half speed until in range
     }
     if(ty<e.y-40&&e.onGround&&Math.random()<.025)e.vy=JFORCE*.75;
-    if(e.atkT<=0&&dist<32){
-      e.atkT=40;
-      // Hit nearest player
+    if(e.atkT<=0&&dist<(e.isBoss?80:32)){
+      e.atkT = e.isBoss ? 30 : 40;
+      // Hit ALL players in radius (boss hits everyone nearby)
+      const slamR = e.isBoss ? 90 : 34;
       for(const p of[warrior,builder]){
-        if(p&&p.alive&&Math.abs(p.x-e.x)<34)dmgPlayer(p,e.dmg);
+        if(p&&p.alive&&Math.abs(p.x-e.x)<slamR&&Math.abs(p.y-e.y)<slamR) dmgPlayer(p,e.dmg);
       }
       // Hit egg
-      if(egg&&Math.abs(egg.x-e.x)<60)dmgEgg(e.dmg*1.5);
+      if(egg&&Math.abs(egg.x-e.x)<80) dmgEgg(e.dmg*1.5);
+      // Boss slam shockwave particles
+      if(e.isBoss) mkPart(e.x+e.w/2, e.y+e.h, '#ff4400', 14, true);
     }
   }
   if(e.atkT>0)e.atkT--;
@@ -1072,24 +1106,34 @@ function dmgEgg(dmg){
 // WAVES
 // ══════════════════════════════════════════════
 const ENEMY_POOLS=[
-  ['goblin'],
-  ['goblin','goblin','skeleton'],
-  ['goblin','skeleton','orc'],
-  ['orc','wizard','skeleton'],
-  ['orc','orc','wizard','wizard'],
-  ['orc','wizard','orc','wizard','orc'],
-  ['orc','wizard','orc','wizard','orc','wizard'],
+  // Wave 1 — goblin rush
+  ['goblin','goblin','goblin'],
+  // Wave 2 — skeletons join
+  ['goblin','goblin','skeleton','skeleton','goblin'],
+  // Wave 3 — orcs arrive
+  ['goblin','skeleton','orc','goblin','skeleton','orc'],
+  // Wave 4 — wizards + mixed
+  ['orc','wizard','skeleton','goblin','wizard','orc','skeleton'],
+  // Wave 5 — heavy assault
+  ['orc','orc','wizard','wizard','skeleton','goblin','orc','wizard'],
+  // Wave 6 — elite horde
+  ['orc','wizard','orc','wizard','orc','wizard','skeleton','skeleton','goblin','goblin'],
+  // Wave 7 — max chaos
+  ['orc','wizard','orc','wizard','orc','wizard','orc','wizard','skeleton','goblin','goblin','goblin'],
 ];
 function startWave(){
   wave++;
   const isFinal=wave>=TOTAL_WAVES;
   $('waveDisp').textContent=isFinal?'⚠ FINAL WAVE':'WAVE '+wave;
   const pool=ENEMY_POOLS[Math.min(wave-1,ENEMY_POOLS.length-1)];
-  enSpawn=isFinal?pool.length+2:pool.length+(wave-1);
+  // Scale enemy count aggressively with wave number
+  const baseCount = pool.length;
+  const bonusCount = (wave-1) * 3; // 3 extra per wave
+  enSpawn = isFinal ? baseCount + bonusCount + 6 : baseCount + bonusCount;
   spawnT=0;waveT=0;
-  // Store pool for spawning
-  window._wavePool=[...pool,...(isFinal?pool:[])];
-  for(let i=enSpawn-pool.length;i>0;i--)window._wavePool.push(pool[Math.floor(Math.random()*pool.length)]);
+  // Build spawn pool: repeat base pool to fill enSpawn
+  window._wavePool=[];
+  for(let i=0;i<enSpawn;i++) window._wavePool.push(pool[i % pool.length]);
   showAnnounce(isFinal?'⚠ FINAL WAVE — DEFEND THE EGG!':'WAVE '+wave,isFinal?'#e83030':'#f5c842');
 }
 function spawnEnemy(){
@@ -1299,10 +1343,10 @@ function loop(){
   }
   if(enSpawn>0){
     spawnT++;
-    if(spawnT>=Math.max(35,90-wave*5)){spawnT=0;enSpawn--;spawnEnemy();}
+    if(spawnT>=Math.max(18,60-wave*4)){spawnT=0;enSpawn--;spawnEnemy();}
   }
 
-  // Boss survival timer
+  // Boss survival timer + continuous horde during boss fight
   if(bossActive){
     bossTimer++;
     const remain=90-~~(bossTimer/60);
@@ -1310,6 +1354,17 @@ function loop(){
     if(remain<=0){
       const boss=enemies.find(e=>e.isBoss&&e.alive);
       if(boss){endGame(true,'survival');}
+    }
+    // Spawn a fresh horde wave every 5 seconds during boss fight
+    if(bossTimer % 300 === 0){
+      const hordePool=['goblin','goblin','skeleton','orc','goblin','skeleton','wizard'];
+      for(let i=0;i<5+Math.floor(bossTimer/300);i++){
+        setTimeout(()=>{
+          const t=hordePool[Math.floor(Math.random()*hordePool.length)];
+          enemies.push(mkEnemy(t, CAM+W+60+Math.random()*200));
+        }, i*400);
+      }
+      mkPart(egg.x, egg.y-40,'#ff0000',8,true);
     }
   }
 
