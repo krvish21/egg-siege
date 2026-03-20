@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>EGG SIEGE 🥚</title>
+<title>EGG SIEGE</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Exo+2:wght@300;400;600;800&display=swap');
 
@@ -620,12 +620,13 @@ function drawDrop(d){
   const icons={'wood':'🪵','bone':'🦴','stone':'🪨','crystal':'✨','core':'💎','heart':'❤️'};
   const sx=~~(d.x-CAM);
   if(sx<-20||sx>W+20)return;
+  // bobT is updated in updateDrops each game tick — pure read here
+  const renderY=~~(d.y+Math.sin(d.bobT)*4);
+  // Fade out in last 60 frames
+  ctx.globalAlpha=d.life<60?d.life/60:1;
   ctx.font='14px serif';
-  ctx.fillText(icons[d.type]||'?',sx,d.y);
-  // bob
-  d.bobT=(d.bobT||0)+.08;
-  d.renderY=d.y+Math.sin(d.bobT)*3;
-  ctx.fillText(icons[d.type]||'?',sx,~~d.renderY);
+  ctx.fillText(icons[d.type]||'?',sx,renderY);
+  ctx.globalAlpha=1;
 }
 
 function drawStructure(s){
@@ -915,8 +916,13 @@ function updateEnemy(e){
       }
     }
   } else {
-    if(dist<e.agg)e.vx=e.dir*(e.spd||1);
-    else e.vx*=.9;
+    // Always move toward target — full speed within aggro range, half speed outside
+    // This ensures enemies never freeze after spawning outside aggro
+    if(dist < e.agg){
+      e.vx = e.dir * (e.spd||1);
+    } else {
+      e.vx = e.dir * (e.spd||1) * 0.5; // walk toward at half speed until in range
+    }
     if(ty<e.y-40&&e.onGround&&Math.random()<.025)e.vy=JFORCE*.75;
     if(e.atkT<=0&&dist<32){
       e.atkT=40;
@@ -948,6 +954,17 @@ function updateEnemy(e){
 // ══════════════════════════════════════════════
 // STRUCTURES UPDATE
 // ══════════════════════════════════════════════
+// ── Drops ──
+function updateDrops(){
+  for(const d of drops){
+    if(!d.alive) continue;
+    d.life--;
+    if(d.life <= 0) d.alive = false;
+    d.bobT = (d.bobT || 0) + 0.08; // bob animation tick
+  }
+  drops = drops.filter(d => d.alive);
+}
+
 function updateStructures(){
   for(const s of structures){
     if(!s.alive)continue;
@@ -1170,8 +1187,7 @@ function render(){
   if(egg)drawEgg(~~(egg.x-CAM),egg.y,egg.hp,egg.maxHp,nestStage);
 
   // Drops
-  drops=drops.filter(d=> d.alive && d.life-- > 0);
-  for(const d of drops)drawDrop(d);
+  for(const d of drops) drawDrop(d);
 
   // Particles
   ctx.save();
@@ -1273,6 +1289,7 @@ function loop(){
   enemies=enemies.filter(e=>e.alive||e.hitFlash>0);
   updateProjectiles();
   updateStructures();
+  updateDrops();
   updateCam();
 
   // Wave logic
@@ -1641,13 +1658,16 @@ function setupJoystick(){
     knob.style.transform='translate(-50%,-50%)';
     inp.x=0;inp.y=0;tid=null;
   }
-  zone.addEventListener('touchstart',start,{passive:false});
-  zone.addEventListener('touchmove',move,{passive:false});
-  zone.addEventListener('touchend',end,{passive:false});
-  zone.addEventListener('touchcancel',end,{passive:false});
-  zone.addEventListener('mousedown',start);
-  document.addEventListener('mousemove',e=>{if(tid!==null)move(e);});
-  document.addEventListener('mouseup',end);
+  zone.addEventListener('touchstart', start, {passive:false});
+  // touchmove on DOCUMENT so sliding outside the zone still works
+  document.addEventListener('touchmove', move, {passive:false});
+  // touchend/cancel on DOCUMENT so lifting finger anywhere ends movement
+  document.addEventListener('touchend',   end, {passive:false});
+  document.addEventListener('touchcancel',end, {passive:false});
+  // Mouse fallback for desktop testing
+  zone.addEventListener('mousedown', start);
+  document.addEventListener('mousemove', e=>{ if(tid!==null) move(e); });
+  document.addEventListener('mouseup', end);
 }
 
 function setupActionBtns(){
@@ -1684,8 +1704,8 @@ function resumeGame(){
 
 document.addEventListener('keydown',e=>{
   if(running&&['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();
-  if(e.code==='ArrowLeft' ||e.key==='a'||e.key==='A')inp.x=-1;
-  if(e.code==='ArrowRight'||e.key==='d'||e.key==='D')inp.x=1;
+  if(e.code==='ArrowLeft' ||e.key==='a'||e.key==='A'){inp.x=-1;inp._lastX='left';}
+  if(e.code==='ArrowRight'||e.key==='d'||e.key==='D'){inp.x=1; inp._lastX='right';}
   if(e.code==='ArrowUp'   ||e.key==='w'||e.key==='W'||e.code==='Space')inp.y=-1;
   if(e.key==='j'||e.key==='J'||e.key==='z'||e.key==='Z'||e.code==='ControlLeft'||e.code==='ControlRight')inp.atk=true;
   if(e.key==='k'||e.key==='K'||e.key==='x'||e.key==='X'||e.code==='ShiftLeft'||e.code==='ShiftRight')inp.spec=true;
@@ -1702,9 +1722,17 @@ document.addEventListener('keydown',e=>{
     if(el)el.style.display=legendVisible?'flex':'none';
   }
 });
+// Reset all inputs if window loses focus — prevents stuck keys
+window.addEventListener('blur', ()=>{
+  inp.x=0; inp.y=0; inp.atk=false; inp.spec=false; inp.coll=false;
+  // Reset joystick knob visually
+  const knob=document.getElementById('joystickKnob');
+  if(knob) knob.style.transform='translate(-50%,-50%)';
+});
+
 document.addEventListener('keyup',e=>{
-  if(e.code==='ArrowLeft' ||e.key==='a'||e.key==='A')inp.x=0;
-  if(e.code==='ArrowRight'||e.key==='d'||e.key==='D')inp.x=0;
+  if(e.code==='ArrowLeft' ||e.key==='a'||e.key==='A'){if(inp._lastX==='left')  inp.x=0;}
+  if(e.code==='ArrowRight'||e.key==='d'||e.key==='D'){if(inp._lastX==='right') inp.x=0;}
   if(e.code==='ArrowUp'   ||e.key==='w'||e.key==='W'||e.code==='Space')inp.y=0;
   if(e.key==='j'||e.key==='J'||e.key==='z'||e.key==='Z'||e.code==='ControlLeft'||e.code==='ControlRight')inp.atk=false;
   if(e.key==='k'||e.key==='K'||e.key==='x'||e.key==='X'||e.code==='ShiftLeft'||e.code==='ShiftRight')inp.spec=false;
