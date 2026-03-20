@@ -1961,105 +1961,72 @@ function setLobbyRole(r){
   $('roleBuilder').classList.toggle('sel',r==='builder');
 }
 
-// ── SDP compression helpers ──
-// We strip SDP to only lines needed for connection, then gzip+base62 encode
-function sdpCompress(sdpObj){
-  const sdp = sdpObj.sdp;
-  // Keep only essential SDP lines (removes most bloat)
-  const keep = sdp.split('\n').filter(l=>{
-    const t = l.trim();
-    return t.startsWith('v=') || t.startsWith('o=') || t.startsWith('s=') ||
-           t.startsWith('t=') || t.startsWith('a=ice-') || t.startsWith('a=fingerprint') ||
-           t.startsWith('a=setup') || t.startsWith('a=mid') ||
-           t.startsWith('m=application') || t.startsWith('c=') ||
-           t.startsWith('a=sendrecv') || t.startsWith('a=sctpmap') ||
-           t.startsWith('a=sctp-port') || t.startsWith('a=candidate') ||
-           t.startsWith('a=group') || t.startsWith('a=msid-semantic') ||
-           t.startsWith('a=max-message') || t.startsWith('a=extmap') ||
-           t.startsWith('a=rtcp-mux');
-  }).join('\n');
-  const obj = {t: sdpObj.type, s: keep};
-  // Simple LZ-inspired compression: replace repeated substrings
-  // Then base64url encode
-  const json = JSON.stringify(obj);
-  // Use CompressionStream (deflate-raw) if available, else fall back to plain base64
-  return json;
-}
+// ── SDP encode/decode — full SDP, deflate compressed, base62 encoded ──
+// No SDP stripping — passes complete description so setRemoteDescription never fails
 
 async function sdpEncode(sdpObj){
-  const json = sdpCompress(sdpObj);
-  try {
-    // Use DecompressionStream for compression (available in modern browsers)
+  const json = JSON.stringify({t: sdpObj.type, s: sdpObj.sdp});
+  try{
     const cs = new CompressionStream('deflate-raw');
-    const writer = cs.writable.getWriter();
-    const encoder = new TextEncoder();
-    writer.write(encoder.encode(json));
-    writer.close();
-    const chunks = [];
-    const reader = cs.readable.getReader();
-    while(true){
-      const {done,value} = await reader.read();
-      if(done) break;
-      chunks.push(value);
-    }
-    const compressed = new Uint8Array(chunks.reduce((a,b)=>a+b.length,0));
-    let off=0; for(const c of chunks){compressed.set(c,off);off+=c.length;}
-    // base62 encode (only alphanumeric — easy to type/share)
-    return uint8ToBase62(compressed);
-  } catch(e){
-    // Fallback: plain base64url (still shorter than full SDP base64)
+    const w  = cs.writable.getWriter();
+    w.write(new TextEncoder().encode(json));
+    w.close();
+    const chunks=[], r=cs.readable.getReader();
+    while(true){ const{done,value}=await r.read(); if(done)break; chunks.push(value); }
+    const buf=new Uint8Array(chunks.reduce((a,b)=>a+b.length,0));
+    let off=0; for(const c of chunks){buf.set(c,off);off+=c.length;}
+    return uint8ToBase62(buf);
+  }catch(e){
+    // Fallback: plain base64url (no compression)
     return btoa(json).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
   }
 }
 
 async function sdpDecode(code){
-  try {
-    // Try base62 → deflate decompress
-    const compressed = base62ToUint8(code);
-    const ds = new DecompressionStream('deflate-raw');
-    const writer = ds.writable.getWriter();
-    writer.write(compressed); writer.close();
-    const chunks=[];
-    const reader = ds.readable.getReader();
-    while(true){const{done,value}=await reader.read();if(done)break;chunks.push(value);}
-    const out = new Uint8Array(chunks.reduce((a,b)=>a+b.length,0));
-    let off=0;for(const c of chunks){out.set(c,off);off+=c.length;}
-    const json = new TextDecoder().decode(out);
-    const obj = JSON.parse(json);
+  // Try base62 + deflate first
+  try{
+    const buf = base62ToUint8(code);
+    const ds  = new DecompressionStream('deflate-raw');
+    const w   = ds.writable.getWriter();
+    w.write(buf); w.close();
+    const chunks=[], r=ds.readable.getReader();
+    while(true){ const{done,value}=await r.read(); if(done)break; chunks.push(value); }
+    const out=new Uint8Array(chunks.reduce((a,b)=>a+b.length,0));
+    let off=0; for(const c of chunks){out.set(c,off);off+=c.length;}
+    const obj=JSON.parse(new TextDecoder().decode(out));
     return {type:obj.t, sdp:obj.s};
-  } catch(e){
-    // Fallback: base64url decode
-    try {
-      const padded = code.replace(/-/g,'+').replace(/_/g,'/');
-      const json = atob(padded + '=='.slice((padded.length+3)%4||0));
-      const obj = JSON.parse(json);
+  }catch(e){
+    // Fallback: base64url
+    try{
+      const b64 = code.replace(/-/g,'+').replace(/_/g,'/');
+      const obj = JSON.parse(atob(b64 + '=='.slice((b64.length+3)%4||0)));
       return {type:obj.t, sdp:obj.s};
-    } catch(e2){ throw new Error('invalid code'); }
+    }catch(e2){ throw new Error('Cannot decode offer/answer — make sure you scanned the right QR'); }
   }
 }
 
-// base62 alphabet — alphanumeric only, easy to type
-const B62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+// base62: alphanumeric only (0-9 A-Z a-z)
+const B62='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 function uint8ToBase62(bytes){
-  // Convert bytes to BigInt then to base62
-  let n = 0n;
-  for(const b of bytes){ n = (n<<8n) | BigInt(b); }
+  let n=0n;
+  for(const b of bytes) n=(n<<8n)|BigInt(b);
   if(n===0n) return '0';
   let s='';
-  while(n>0n){ s=B62[Number(n%62n)]+s; n=n/62n; }
-  // Preserve leading zeros as '0'
-  for(const b of bytes){ if(b!==0) break; s='0'+s; }
+  while(n>0n){ s=B62[Number(n%62n)]+s; n/=62n; }
   return s;
 }
 function base62ToUint8(str){
   let n=0n;
-  for(const c of str){ n=n*62n+BigInt(B62.indexOf(c)); }
-  // Convert BigInt to bytes
-  const hex = n.toString(16).padStart(2,'0');
-  const padded = hex.length%2 ? '0'+hex : hex;
-  const bytes = new Uint8Array(padded.length/2);
-  for(let i=0;i<bytes.length;i++) bytes[i]=parseInt(padded.slice(i*2,i*2+2),16);
-  return bytes;
+  for(const c of str){
+    const v=B62.indexOf(c);
+    if(v<0) throw new Error('Invalid base62 character: '+c);
+    n=n*62n+BigInt(v);
+  }
+  const hex=n.toString(16).padStart(2,'0');
+  const pad=hex.length%2?'0'+hex:hex;
+  const out=new Uint8Array(pad.length/2);
+  for(let i=0;i<out.length;i++) out[i]=parseInt(pad.slice(i*2,i*2+2),16);
+  return out;
 }
 
 // ── Host flow ──
