@@ -114,6 +114,26 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--dark);font-fam
 .scan-line{position:absolute;left:0;right:0;height:2px;background:rgba(245,200,66,.6);
   box-shadow:0 0 6px #f5c842;animation:scanLine 1.5s linear infinite;}
 
+.code-box{
+  width:54px;height:64px;
+  background:rgba(245,200,66,.06);
+  border:2px solid rgba(245,200,66,.4);
+  border-radius:6px;
+  color:#f5c842;
+  font-family:'Cinzel Decorative',serif;
+  font-size:1.8rem;
+  font-weight:900;
+  text-align:center;
+  text-transform:uppercase;
+  caret-color:transparent;
+  outline:none;
+  transition:border-color .15s, box-shadow .15s;
+}
+.code-box:focus{
+  border-color:#f5c842;
+  box-shadow:0 0 12px rgba(245,200,66,.4);
+}
+
 .sdp-area{
   width:100%;height:54px;background:rgba(0,0,0,.5);border:1px solid rgba(245,200,66,.3);
   color:var(--gold);font-size:.3rem;font-family:monospace;word-break:break-all;padding:4px;resize:none;
@@ -245,10 +265,8 @@ canvas#gc{display:block;image-rendering:pixelated;position:absolute;top:76px;lef
 @keyframes shake{0%,100%{transform:translate(-50%,-50%)}25%{transform:translate(-53%,-50%)}75%{transform:translate(-47%,-50%)}}
 .egg-shake{animation:shake .15s linear infinite;}
 </style>
-<!-- QR code generator -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<!-- jsQR scanner — works on Safari/iPhone, no BarcodeDetector needed -->
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<!-- PeerJS — handles WebRTC signaling via free cloud server -->
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
 
@@ -276,9 +294,9 @@ canvas#gc{display:block;image-rendering:pixelated;position:absolute;top:76px;lef
 <!-- ══ LOBBY ══ -->
 <div id="lobbyScreen" class="screen">
   <div class="lobby-wrap">
-    <div class="lobby-title" id="lobbyTitle">HOST GAME</div>
+    <div class="lobby-title" id="lobbyTitle">MULTIPLAYER</div>
 
-    <!-- Role picker (shown for both host and join before connecting) -->
+    <!-- Role picker -->
     <div id="roleSection">
       <div class="status-msg" style="color:rgba(255,255,255,.5)">Choose your role:</div>
       <div class="role-select">
@@ -295,54 +313,39 @@ canvas#gc{display:block;image-rendering:pixelated;position:absolute;top:76px;lef
       </div>
     </div>
 
-    <!-- HOST: show QR → scan answer QR -->
+    <!-- HOST -->
     <div id="hostSection" style="display:none">
-      <div class="status-msg" id="hostStat">Generating QR…</div>
-      <div class="spin" id="hostSpin"></div>
-      <!-- Step 1: friend scans this QR -->
-      <div id="hostQRWrap" style="display:none;flex-direction:column;align-items:center;gap:8px;">
-        <div style="font-size:.38rem;color:rgba(255,255,255,.4);letter-spacing:2px;">FRIEND SCANS THIS ↓</div>
-        <div id="hostQR" style="background:#fff;padding:8px;border-radius:6px;display:inline-block;"></div>
-        <div style="font-size:.32rem;color:rgba(255,255,255,.3);">Opens the game on their phone with offer pre-filled</div>
-      </div>
-      <!-- Step 2: host scans friend's answer QR -->
-      <div id="hostScanWrap" style="display:none;flex-direction:column;align-items:center;gap:8px;margin-top:8px;">
-        <div style="font-size:.38rem;color:rgba(255,255,255,.4);letter-spacing:2px;">NOW SCAN THEIR REPLY ↓</div>
-        <video id="hostScanVideo" style="width:200px;height:200px;object-fit:cover;border:2px solid #f5c842;border-radius:4px;" playsinline></video>
-        <canvas id="hostScanCanvas" style="display:none"></canvas>
-        <div class="status-msg" id="hostScanStat">Point camera at friend's QR code</div>
-      </div>
-      <!-- Fallback: manual paste -->
-      <details style="margin-top:10px;">
-        <summary style="font-size:.35rem;color:rgba(255,255,255,.3);cursor:pointer;letter-spacing:1px;">📋 Manual code instead</summary>
-        <textarea class="sdp-area" id="hostSDP" readonly placeholder="Offer code…" style="margin-top:6px"></textarea>
-        <textarea class="sdp-area" id="answerArea" placeholder="PASTE ANSWER CODE" style="margin-top:4px"></textarea>
-        <button class="btn btn-green" style="width:100%;margin-top:6px;font-size:.4rem" onclick="acceptAnswer()">CONNECT →</button>
-      </details>
+      <div class="status-msg" style="color:rgba(255,255,255,.4);margin-bottom:4px">Your room code:</div>
+      <div id="roomCodeBox" style="
+        font-family:'Cinzel Decorative',serif;
+        font-size:clamp(1.6rem,8vw,2.4rem);
+        font-weight:900;
+        letter-spacing:10px;
+        color:#f5c842;
+        text-shadow:0 0 20px rgba(245,200,66,.6);
+        text-align:center;
+        padding:16px 8px;
+        background:rgba(245,200,66,.06);
+        border:1px solid rgba(245,200,66,.3);
+        border-radius:4px;
+        margin:6px 0;
+      ">----</div>
+      <div class="status-msg" id="hostStat">Connecting to server…</div>
+      <div class="spin" id="hostSpin" style="margin:8px auto"></div>
     </div>
 
-    <!-- JOIN: scan host QR → show answer QR -->
+    <!-- JOIN -->
     <div id="joinSection" style="display:none">
-      <!-- Step 1: scan host's QR (or paste manually) -->
-      <div id="joinScanWrap" style="display:flex;flex-direction:column;align-items:center;gap:8px;">
-        <div style="font-size:.38rem;color:rgba(255,255,255,.4);letter-spacing:2px;">SCAN HOST'S QR ↓</div>
-        <video id="joinScanVideo" style="width:200px;height:200px;object-fit:cover;border:2px solid #30a8e8;border-radius:4px;" playsinline></video>
-        <canvas id="joinScanCanvas" style="display:none"></canvas>
-        <div class="status-msg" id="joinStat">Point camera at host QR code</div>
+      <div class="status-msg" style="color:rgba(255,255,255,.4);margin-bottom:8px">Enter room code:</div>
+      <!-- Big tap-friendly letter boxes -->
+      <div id="codeBoxes" style="display:flex;gap:8px;justify-content:center;margin-bottom:12px;">
+        <input class="code-box" id="cb0" maxlength="1" oninput="codeInput(0)" onkeydown="codeKey(event,0)">
+        <input class="code-box" id="cb1" maxlength="1" oninput="codeInput(1)" onkeydown="codeKey(event,1)">
+        <input class="code-box" id="cb2" maxlength="1" oninput="codeInput(2)" onkeydown="codeKey(event,2)">
+        <input class="code-box" id="cb3" maxlength="1" oninput="codeInput(3)" onkeydown="codeKey(event,3)">
       </div>
-      <!-- Step 2: show answer QR for host to scan -->
-      <div id="joinQRWrap" style="display:none;flex-direction:column;align-items:center;gap:8px;">
-        <div style="font-size:.38rem;color:rgba(255,255,255,.4);letter-spacing:2px;">HOST SCANS THIS ↓</div>
-        <div id="joinQR" style="background:#fff;padding:8px;border-radius:6px;display:inline-block;"></div>
-        <div style="font-size:.32rem;color:rgba(255,255,255,.3);">Show this QR to the host</div>
-      </div>
-      <!-- Fallback: manual -->
-      <details style="margin-top:10px;">
-        <summary style="font-size:.35rem;color:rgba(255,255,255,.3);cursor:pointer;letter-spacing:1px;">📋 Manual code instead</summary>
-        <textarea class="sdp-area" id="offerArea" placeholder="PASTE OFFER CODE" style="margin-top:6px"></textarea>
-        <button class="btn btn-blue" style="width:100%;margin-top:6px;font-size:.4rem" onclick="doJoinManual()">GENERATE ANSWER</button>
-        <textarea class="sdp-area" id="joinSDP" readonly placeholder="Answer code…" style="display:none;margin-top:4px"></textarea>
-      </details>
+      <button class="btn btn-blue" style="width:100%" onclick="joinRoom()">JOIN →</button>
+      <div class="status-msg" id="joinStat"></div>
     </div>
 
     <button class="btn btn-red" style="width:100%;margin-top:14px" onclick="backMenu()">← BACK</button>
@@ -1493,8 +1496,8 @@ function loop(){
   if(lp)$('specFill').style.height=(lp.specCharge*100)+'%';
 
   // Send to peer
-  if(dataChan&&dataChan.readyState==='open'){
-    dataChan.send(JSON.stringify({t:'i',x:inp.x,y:inp.y,atk:inp.atk,spec:inp.spec,coll:inp.coll}));
+  if(conn&&conn.open){
+    conn.send(JSON.stringify({t:'i',x:inp.x,y:inp.y,atk:inp.atk,spec:inp.spec,coll:inp.coll}));
   }
 
   render();
@@ -1952,294 +1955,18 @@ document.addEventListener('keyup',e=>{
 });
 
 // ══════════════════════════════════════════════
-// WEBRTC — Compressed short-code signaling
-// SDP is stripped to essentials then deflate-compressed
-// producing a ~200-char alphanumeric code instead of ~4000-char base64
+// MULTIPLAYER — PeerJS (free signaling server)
+// Players share a 4-letter room code. No SDP, no QR.
 // ══════════════════════════════════════════════
-let peerRole='warrior';
-function setLobbyRole(r){
-  peerRole=r;
-  $('roleWarrior').classList.toggle('sel',r==='warrior');
-  $('roleBuilder').classList.toggle('sel',r==='builder');
-}
+let peer=null, conn=null, peerRole='warrior';
 
-// ── SDP encode/decode — full SDP, deflate compressed, base62 encoded ──
-// No SDP stripping — passes complete description so setRemoteDescription never fails
+// Word list for memorable room codes
+const WORDS=['FIRE','WOLF','MOON','STAR','IRON','GOLD','BONE','ROCK',
+             'WING','FANG','CLAW','MIST','DAWN','DUSK','RAGE','HERO',
+             'BLAZE','STORM','FROST','SHADOW','BLADE','ARROW','KNIGHT'];
 
-async function sdpEncode(sdpObj){
-  const json = JSON.stringify({t: sdpObj.type, s: sdpObj.sdp});
-  try{
-    const cs = new CompressionStream('deflate-raw');
-    const w  = cs.writable.getWriter();
-    w.write(new TextEncoder().encode(json));
-    w.close();
-    const chunks=[], r=cs.readable.getReader();
-    while(true){ const{done,value}=await r.read(); if(done)break; chunks.push(value); }
-    const buf=new Uint8Array(chunks.reduce((a,b)=>a+b.length,0));
-    let off=0; for(const c of chunks){buf.set(c,off);off+=c.length;}
-    return uint8ToBase62(buf);
-  }catch(e){
-    // Fallback: plain base64url (no compression)
-    return btoa(json).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
-  }
-}
-
-async function sdpDecode(code){
-  // Try base62 + deflate first
-  try{
-    const buf = base62ToUint8(code);
-    const ds  = new DecompressionStream('deflate-raw');
-    const w   = ds.writable.getWriter();
-    w.write(buf); w.close();
-    const chunks=[], r=ds.readable.getReader();
-    while(true){ const{done,value}=await r.read(); if(done)break; chunks.push(value); }
-    const out=new Uint8Array(chunks.reduce((a,b)=>a+b.length,0));
-    let off=0; for(const c of chunks){out.set(c,off);off+=c.length;}
-    const obj=JSON.parse(new TextDecoder().decode(out));
-    return {type:obj.t, sdp:obj.s};
-  }catch(e){
-    // Fallback: base64url
-    try{
-      const b64 = code.replace(/-/g,'+').replace(/_/g,'/');
-      const obj = JSON.parse(atob(b64 + '=='.slice((b64.length+3)%4||0)));
-      return {type:obj.t, sdp:obj.s};
-    }catch(e2){ throw new Error('Cannot decode offer/answer — make sure you scanned the right QR'); }
-  }
-}
-
-// base62: alphanumeric only (0-9 A-Z a-z)
-const B62='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-function uint8ToBase62(bytes){
-  let n=0n;
-  for(const b of bytes) n=(n<<8n)|BigInt(b);
-  if(n===0n) return '0';
-  let s='';
-  while(n>0n){ s=B62[Number(n%62n)]+s; n/=62n; }
-  return s;
-}
-function base62ToUint8(str){
-  let n=0n;
-  for(const c of str){
-    const v=B62.indexOf(c);
-    if(v<0) throw new Error('Invalid base62 character: '+c);
-    n=n*62n+BigInt(v);
-  }
-  const hex=n.toString(16).padStart(2,'0');
-  const pad=hex.length%2?'0'+hex:hex;
-  const out=new Uint8Array(pad.length/2);
-  for(let i=0;i<out.length;i++) out[i]=parseInt(pad.slice(i*2,i*2+2),16);
-  return out;
-}
-
-// ── Host flow ──
-// ── Reliable ICE gathering: resolves when null candidate fires OR timeout ──
-function waitForICE(pc, onProgress){
-  return new Promise(resolve=>{
-    let done=false;
-    let candidates=0;
-    function finish(){
-      if(done) return;
-      done=true;
-      resolve(pc.localDescription);
-    }
-    pc.onicecandidate=e=>{
-      if(e.candidate){
-        candidates++;
-        if(onProgress) onProgress('Gathering… ('+candidates+' candidates)');
-      } else {
-        // null candidate = gathering complete
-        finish();
-      }
-    };
-    pc.onicegatheringstatechange=()=>{
-      if(pc.iceGatheringState==='complete') finish();
-    };
-    // Fallback: after 5s, use whatever we have
-    setTimeout(()=>{
-      if(!done){
-        if(onProgress) onProgress('Using partial ICE ('+candidates+' candidates)');
-        finish();
-      }
-    }, 5000);
-  });
-}
-
-async function showHost(){
-  showScreen('lobbyScreen');
-  $('lobbyTitle').textContent='HOST GAME';
-  $('hostSection').style.display='block';
-  $('joinSection').style.display='none';
-  setLobbyRole('warrior');
-  $('hostQRWrap').style.display='none';
-  $('hostScanWrap').style.display='none';
-  $('hostSpin').style.display='block';
-  $('hostStat').textContent='Creating offer…';
-
-  if(peerConn){ try{peerConn.close();}catch(e){} peerConn=null; }
-
-  peerConn=new RTCPeerConnection({iceServers:[
-    {urls:'stun:stun.l.google.com:19302'},
-    {urls:'stun:stun1.l.google.com:19302'},
-    {urls:'stun:stun2.l.google.com:19302'},
-    {urls:'stun:stun3.l.google.com:19302'}
-  ]});
-  dataChan=peerConn.createDataChannel('game',{ordered:false,maxRetransmits:0});
-  setupChan(dataChan);
-
-  peerConn.oniceconnectionstatechange=()=>{
-    if(peerConn.iceConnectionState==='connected'||peerConn.iceConnectionState==='completed'){
-      stopScanner('hostScanVideo');
-      $('hostStat').textContent='✅ Connected! Starting…';
-      const oppRole=peerRole==='warrior'?'builder':'warrior';
-      try{ dataChan.send(JSON.stringify({t:'role',role:oppRole,waves:TOTAL_WAVES})); }catch(e){}
-      setTimeout(()=>initGame('host',peerRole),1400);
-    }
-  };
-
-  try{
-    const offer=await peerConn.createOffer();
-    await peerConn.setLocalDescription(offer);
-    $('hostStat').textContent='Gathering network info…';
-
-    // Wait reliably for ICE gathering
-    const desc = await waitForICE(peerConn, msg=>{ $('hostStat').textContent=msg; });
-
-    $('hostSpin').style.display='none';
-    const code = await sdpEncode(desc);
-    $('hostSDP').value = code;
-
-    // Encode just the SDP code in QR (not a URL)
-    // file:// URLs won't open on iPhone — friend scans this code directly in-app
-    $('hostQRWrap').style.display='flex';
-    drawQR('hostQR', code);
-    $('hostStat').textContent='Friend: open game → Join → scan this QR';
-
-    // Start scanning for answer after QR is shown
-    setTimeout(()=>{
-      $('hostScanWrap').style.display='flex';
-      startScanner('hostScanVideo','hostScanCanvas','hostScanStat', async(scanned)=>{
-        stopScanner('hostScanVideo');
-        $('hostStat').textContent='Received answer, connecting…';
-        try{
-          const ans=await sdpDecode(scanned);
-          await peerConn.setRemoteDescription(ans);
-          $('hostStat').textContent='Connecting…';
-        }catch(e){ $('hostStat').textContent='Bad QR, try the manual code below'; }
-      });
-    },800);
-  } catch(e){ $('hostStat').textContent='Error: '+e.message; console.error(e); }
-}
-
-async function acceptAnswer(){
-  const raw=$('answerArea').value.trim();
-  if(!raw){$('hostStat').textContent='Paste the reply code first';return;}
-  try{
-    const ans=await sdpDecode(raw);
-    await peerConn.setRemoteDescription(ans);
-    $('hostStat').textContent='Connecting…';
-  }catch(e){$('hostStat').textContent='❌ Invalid code';}
-}
-
-async function acceptAnswer(){
-  const raw = $('answerArea').value.trim();
-  if(!raw){ $('hostStat').textContent='Paste the reply code first'; return; }
-  try{
-    const ans = await sdpDecode(raw);
-    await peerConn.setRemoteDescription(ans);
-    $('hostStat').textContent='Connecting…';
-  }catch(e){ $('hostStat').textContent='❌ Invalid code — try again'; }
-}
-
-// ── Join flow ──
-function showJoin(){
-  showScreen('lobbyScreen');
-  $('lobbyTitle').textContent='JOIN GAME';
-  $('hostSection').style.display='none';
-  $('joinSection').style.display='block';
-  $('joinQRWrap').style.display='none';
-  $('joinScanWrap').style.display='flex';
-  setLobbyRole('builder');
-  $('joinStat').textContent='Point camera at host QR code';
-
-  // Check if launched via QR URL param
-  const params=new URLSearchParams(location.search);
-  const offerCode=params.get('join');
-  if(offerCode){
-    $('joinStat').textContent='Got offer from QR - Connecting...';
-    $('joinScanWrap').style.display='none';
-    $('offerArea').value=offerCode;
-    doJoin(offerCode);
-    return;
-  }
-
-  // Start camera scanner
-  startScanner('joinScanVideo','joinScanCanvas','joinStat', async(code)=>{
-    stopScanner('joinScanVideo');
-    // Strip URL prefix if they scanned a URL QR
-    let sdpCode=code;
-    try{ const u=new URL(code); sdpCode=u.searchParams.get('join')||code; }catch(e){}
-    doJoin(sdpCode);
-  });
-}
-
-async function doJoin(rawCode){
-  const raw = rawCode || ($('offerArea')?$('offerArea').value.trim():'');
-  if(!raw){ $('joinStat').textContent='No offer code found'; return; }
-  $('joinStat').textContent='Decoding offer…';
-
-  if(peerConn){ try{peerConn.close();}catch(e){} peerConn=null; }
-
-  try{
-    const offer=await sdpDecode(raw);
-    peerConn=new RTCPeerConnection({iceServers:[
-      {urls:'stun:stun.l.google.com:19302'},
-      {urls:'stun:stun1.l.google.com:19302'},
-      {urls:'stun:stun2.l.google.com:19302'},
-      {urls:'stun:stun3.l.google.com:19302'}
-    ]});
-    peerConn.ondatachannel=e=>{dataChan=e.channel;setupChan(dataChan);};
-    peerConn.oniceconnectionstatechange=()=>{
-      if(peerConn.iceConnectionState==='connected'||peerConn.iceConnectionState==='completed'){
-        $('joinStat').textContent='✅ Connected! Waiting for host…';
-      }
-    };
-
-    await peerConn.setRemoteDescription(offer);
-    $('joinStat').textContent='Creating answer…';
-    const answer=await peerConn.createAnswer();
-    await peerConn.setLocalDescription(answer);
-    $('joinStat').textContent='Gathering network info…';
-
-    // Wait reliably for ICE
-    const desc = await waitForICE(peerConn, msg=>{ $('joinStat').textContent=msg; });
-
-    const code=await sdpEncode(desc);
-    if($('joinSDP')) { $('joinSDP').value=code; $('joinSDP').style.display='block'; }
-
-    // Show answer QR
-    $('joinScanWrap').style.display='none';
-    $('joinQRWrap').style.display='flex';
-    drawQR('joinQR', code);
-    $('joinStat').textContent='Step 2: Show this QR to the host';
-  }catch(e){ $('joinStat').textContent='Error: '+e.message; console.error(e); }
-}
-
-// Manual join fallback
-async function doJoinManual(){ doJoin($('offerArea').value.trim()); }
-
-function setupChan(ch){
-  ch.onopen=()=>console.log('RTC open');
-  ch.onmessage=e=>{
-    try{
-      const d=JSON.parse(e.data);
-      if(d.t==='role'){myRole=d.role;if(d.waves)TOTAL_WAVES=d.waves;setTimeout(()=>initGame('join',myRole),1400);}
-      if(d.t==='i'){remInp={x:d.x,y:d.y,atk:d.atk,spec:d.spec,coll:d.coll};}
-      if(d.t==='sync'){
-        const rp=gameMode==='join'?warrior:builder;
-        if(rp&&d.x!==undefined){rp.x=d.x;rp.y=d.y;rp.hp=d.hp;rp.alive=d.al;rp.dir=d.dir;rp.frame=d.fr;}
-      }
-    }catch(err){}
-  };
+function randomCode(){
+  return WORDS[Math.floor(Math.random()*WORDS.length)];
 }
 
 function pickRole(r){
@@ -2247,6 +1974,150 @@ function pickRole(r){
   $('roleWarrior').classList.toggle('sel',r==='warrior');
   $('roleBuilder').classList.toggle('sel',r==='builder');
 }
+
+// ── Code input boxes ──
+function codeInput(idx){
+  const box=$('cb'+idx);
+  const val=box.value.replace(/[^a-zA-Z]/g,'').toUpperCase();
+  box.value=val;
+  if(val && idx<3) $('cb'+(idx+1)).focus();
+}
+function codeKey(e,idx){
+  if(e.key==='Backspace'&&!$('cb'+idx).value&&idx>0){
+    $('cb'+(idx-1)).focus();
+    $('cb'+(idx-1)).value='';
+  }
+  if(e.key==='Enter') joinRoom();
+}
+function getTypedCode(){
+  return [0,1,2,3].map(i=>($('cb'+i)?$('cb'+i).value:'')).join('').toUpperCase();
+}
+
+// ── PeerJS helpers ──
+function makePeer(id){
+  // Use free PeerJS cloud server
+  return new Peer(id, {
+    host: '0.peerjs.com',
+    port: 443,
+    secure: true,
+    path: '/',
+    config:{iceServers:[
+      {urls:'stun:stun.l.google.com:19302'},
+      {urls:'stun:stun1.l.google.com:19302'}
+    ]}
+  });
+}
+
+function setupConn(c){
+  conn=c;
+  c.on('open',()=>{
+    console.log('PeerJS connection open');
+    isConnected=true;
+    if(gameMode==='host'){
+      // Tell joiner their role and wave count
+      const oppRole=peerRole==='warrior'?'builder':'warrior';
+      c.send(JSON.stringify({t:'role',role:oppRole,waves:TOTAL_WAVES}));
+      setTimeout(()=>initGame('host',peerRole),600);
+    }
+  });
+  c.on('data',d=>{
+    try{
+      const msg=JSON.parse(d);
+      if(msg.t==='role'){
+        myRole=msg.role;
+        if(msg.waves) TOTAL_WAVES=msg.waves;
+        setTimeout(()=>initGame('join',myRole),600);
+      }
+      if(msg.t==='i') remInp={x:msg.x,y:msg.y,atk:msg.atk,spec:msg.spec,coll:msg.coll};
+      if(msg.t==='sync'){
+        const rp=gameMode==='join'?warrior:builder;
+        if(rp&&msg.x!==undefined){rp.x=msg.x;rp.y=msg.y;rp.hp=msg.hp;rp.alive=msg.al;rp.dir=msg.dir;rp.frame=msg.fr;}
+      }
+    }catch(e){}
+  });
+  c.on('close',()=>{ isConnected=false; });
+  c.on('error',e=>console.warn('conn error',e));
+}
+
+// ── HOST ──
+async function showHost(){
+  showScreen('lobbyScreen');
+  $('lobbyTitle').textContent='HOST GAME';
+  $('hostSection').style.display='block';
+  $('joinSection').style.display='none';
+  $('hostSpin').style.display='block';
+  $('hostStat').textContent='Connecting to server…';
+  $('roomCodeBox').textContent='…';
+
+  if(peer){ try{peer.destroy();}catch(e){} peer=null; }
+
+  const code=randomCode();
+  peer=makePeer('eggsiego-'+code);
+
+  peer.on('open',()=>{
+    $('hostSpin').style.display='none';
+    $('roomCodeBox').textContent=code;
+    $('hostStat').textContent='Share this code — waiting for friend…';
+  });
+
+  peer.on('connection',c=>{
+    $('hostStat').textContent='Friend connected! Starting…';
+    setupConn(c);
+  });
+
+  peer.on('error',e=>{
+    if(e.type==='unavailable-id'){
+      // Code taken — try a new one
+      peer.destroy();
+      showHost();
+    } else {
+      $('hostStat').textContent='Error: '+e.message;
+    }
+  });
+}
+
+// ── JOIN ──
+function showJoin(){
+  showScreen('lobbyScreen');
+  $('lobbyTitle').textContent='JOIN GAME';
+  $('hostSection').style.display='none';
+  $('joinSection').style.display='block';
+  $('joinStat').textContent='';
+  // Focus first box
+  setTimeout(()=>{ if($('cb0')) $('cb0').focus(); },100);
+}
+
+function joinRoom(){
+  const code=getTypedCode();
+  if(code.length<4){ $('joinStat').textContent='Enter all 4 letters'; return; }
+  $('joinStat').textContent='Connecting…';
+
+  if(peer){ try{peer.destroy();}catch(e){} peer=null; }
+
+  // Join peer uses a random ID
+  peer=makePeer(undefined);
+  peer.on('open',()=>{
+    const c=peer.connect('eggsiego-'+code,{reliable:false});
+    setupConn(c);
+    c.on('error',e=>{ $('joinStat').textContent='Could not connect — check the code'; });
+  });
+  peer.on('error',e=>{
+    $('joinStat').textContent='Connection failed: '+e.message;
+  });
+
+  // Timeout if no connection after 10s
+  setTimeout(()=>{
+    if(!isConnected) $('joinStat').textContent='Timed out — check code and try again';
+  },10000);
+}
+
+// Stub — no longer needed but kept so backMenu works
+function waitForICE(){ return Promise.resolve(); }
+function sdpEncode(){ return Promise.resolve(''); }
+function sdpDecode(){ return Promise.resolve({}); }
+function stopScanner(){ }
+function startScanner(){ }
+function drawQR(){ }
 // ══════════════════════════════════════════════
 // SCREENS / MENU
 // ══════════════════════════════════════════════
@@ -2261,7 +2132,7 @@ function showScreen(id){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   $(id).classList.add('active');
 }
-function backMenu(){running=false;if(peerConn){peerConn.close();peerConn=null;}showScreen('menuScreen');}
+function backMenu(){running=false;if(peer){try{peer.destroy();}catch(e){} peer=null;} conn=null; showScreen('menuScreen');}
 
 // Resize
 window.addEventListener('resize',()=>{
@@ -2305,113 +2176,10 @@ function drawQR(divId, text){
 // ── Camera QR scanner ──
 let _scanStream=null, _scanRAF=null;
 
-async function startScanner(videoId, canvasId, statId, onResult){
-  const video=$(videoId), cv=$(canvasId), stat=$(statId);
-  if(!video||!cv){ console.warn('Scanner elements missing'); return; }
 
-  try{
-    // Request back camera — essential for iPhone
-    const constraints={
-      video:{
-        facingMode:{ideal:'environment'},
-        width:{ideal:1280}, height:{ideal:720}
-      }
-    };
-    _scanStream = await navigator.mediaDevices.getUserMedia(constraints);
-    video.setAttribute('playsinline','');  // required for iOS
-    video.setAttribute('muted','');
-    video.muted = true;
-    video.srcObject = _scanStream;
-    await video.play();
-    stat.textContent = 'Scanning - hold steady...';
-
-    let lastScan = 0;
-    function scan(){
-      _scanRAF = requestAnimationFrame(scan);
-      // Throttle to ~15fps for battery/performance
-      const now = Date.now();
-      if(now - lastScan < 66) return;
-      lastScan = now;
-
-      if(video.readyState < video.HAVE_ENOUGH_DATA) return;
-
-      cv.width  = video.videoWidth;
-      cv.height = video.videoHeight;
-      const ctx2 = cv.getContext('2d', {willReadFrequently:true});
-      ctx2.drawImage(video, 0, 0);
-
-      const imageData = ctx2.getImageData(0, 0, cv.width, cv.height);
-
-      // jsQR — works on ALL browsers including Safari/iPhone
-      if(window.jsQR){
-        const result = jsQR(imageData.data, imageData.width, imageData.height, {
-          inversionAttempts: 'dontInvert'
-        });
-        if(result && result.data){
-          onResult(result.data);
-          return; // stop scanning after first result
-        }
-      }
-
-      // BarcodeDetector as bonus where available (Chrome Android)
-      if(window.BarcodeDetector && window._barcodeDetector){
-        window._barcodeDetector.detect(cv).then(codes=>{
-          if(codes.length > 0) onResult(codes[0].rawValue);
-        }).catch(()=>{});
-      }
-    }
-
-    if(window.BarcodeDetector){
-      try{ window._barcodeDetector = new BarcodeDetector({formats:['qr_code']}); }
-      catch(e){ window._barcodeDetector = null; }
-    }
-
-    _scanRAF = requestAnimationFrame(scan);
-
-  }catch(e){
-    console.warn('Camera error:', e);
-    if(e.name === 'NotAllowedError'){
-      stat.textContent = 'Camera permission denied — use manual code below';
-    } else if(e.name === 'NotFoundError'){
-      stat.textContent = 'No camera found — use manual code below';
-    } else {
-      stat.textContent = 'Camera unavailable — use manual code below';
-    }
-    // Auto-open manual fallback
-    const details = video.closest('div') && video.closest('[id$="Section"]') &&
-                    video.closest('[id$="Section"]').querySelector('details');
-    if(details) details.open = true;
-  }
-}
-
-function stopScanner(videoId){
-  if(_scanRAF){ cancelAnimationFrame(_scanRAF); _scanRAF=null; }
-  if(_scanStream){ _scanStream.getTracks().forEach(t=>t.stop()); _scanStream=null; }
-  const v=$(videoId);
-  if(v){ v.srcObject=null; }
-  if(window._barcodeDetector) window._barcodeDetector=null;
-}
 
 // ── Auto-join if URL has ?join= param (opened via QR scan) ──
-(function checkURLJoin(){
-  try{
-    const params=new URLSearchParams(location.search);
-    const joinCode=params.get('join');
-    if(joinCode){
-      // Auto-navigate to join lobby with pre-filled code
-      const ready=()=>{
-        showJoin();
-        // Pre-fill offer area if visible
-        setTimeout(()=>{
-          const el=$('offerArea');
-          if(el){ el.value=decodeURIComponent(joinCode); }
-        },300);
-      };
-      if(document.readyState==='loading') window.addEventListener('DOMContentLoaded',ready,{once:true});
-      else ready();
-    }
-  }catch(e){}
-})();
+
 
 // ── Menu particles ──
 (function(){
